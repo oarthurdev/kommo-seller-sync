@@ -860,20 +860,34 @@ class KommoAPI:
                         if activity_type == "outgoing_chat_message":
                             message_text, message_source = extract_message(va)
                         if activity_type == "lead_status_changed":
-                            status_before = vb.get("status_id")
-                            status_after = va.get("status_id")
+                            # Extract status IDs from the JSON structure
+                            status_before = None
+                            status_after = None
+
+                            # Extract from valor_anterior (vb_raw)
+                            if isinstance(vb_raw, list) and len(vb_raw) > 0:
+                                if isinstance(vb_raw[0], dict) and "lead_status" in vb_raw[0]:
+                                    if isinstance(vb_raw[0]["lead_status"], dict):
+                                        status_before = vb_raw[0]["lead_status"].get("id")
+
+                            # Extract from valor_novo (va_raw)
+                            if isinstance(va_raw, list) and len(va_raw) > 0:
+                                if isinstance(va_raw[0], dict) and "lead_status" in va_raw[0]:
+                                    if isinstance(va_raw[0]["lead_status"], dict):
+                                        status_after = va_raw[0]["lead_status"].get("id")
+
                         if activity_type == "entity_responsible_changed":
                             # Extract responsible user IDs from the JSON structure
                             old_responsible = None
                             new_responsible = None
-                            
+
                             # Extract from valor_anterior (vb_raw)
                             if isinstance(vb_raw, list) and len(vb_raw) > 0:
                                 if isinstance(vb_raw[0], dict) and "responsible_user" in vb_raw[0]:
                                     if isinstance(vb_raw[0]["responsible_user"], dict):
                                         old_responsible = vb_raw[0]["responsible_user"].get("id")
-                            
-                            # Extract from valor_novo (va_raw) 
+
+                            # Extract from valor_novo (va_raw)
                             if isinstance(va_raw, list) and len(va_raw) > 0:
                                 if isinstance(va_raw[0], dict) and "responsible_user" in va_raw[0]:
                                     if isinstance(va_raw[0]["responsible_user"], dict):
