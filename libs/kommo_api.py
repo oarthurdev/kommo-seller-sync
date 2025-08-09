@@ -774,6 +774,10 @@ class KommoAPI:
                         "filter[type]": event_type,
                     }
 
+                    if from_timestamp:
+                        params["filter[created_at][from]"] = from_timestamp
+                    params["order[created_at]"] = "desc"
+
                     try:
                         resp = self._make_request("events", params=params)
                     except Exception as e:
@@ -864,6 +868,8 @@ class KommoAPI:
 
                         criado_em = to_dt_from_unix(ev.get("created_at"))
 
+                        from datetime import datetime, timezone
+
                         # Preparar registro para salvar
                         processed_activity = {
                             "id": ev.get("id"),
@@ -882,7 +888,8 @@ class KommoAPI:
                             "entity_id": entity_id,
                             "criado_em": criado_em,
                             "company_id": company_id,
-                            "updated_at": datetime.now(timezone.utc).isoformat()
+                            "updated_at":
+                            datetime.now(timezone.utc).isoformat()
                         }
 
                         batch_to_save.append(processed_activity)
