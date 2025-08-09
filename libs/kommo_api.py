@@ -646,7 +646,7 @@ class KommoAPI:
                 logger.error("Company ID is required for activity sync")
                 return pd.DataFrame()
 
-            # 2) event types: padrão nos três solicitados
+            # 2) event types
             requested_event_types = event_types or [
                 "lead_status_changed",
                 "outgoing_chat_message",
@@ -654,8 +654,7 @@ class KommoAPI:
             ]
             logger.info(f"Syncing event types: {requested_event_types}")
 
-            # 3) timestamp de início: respeita o parâmetro se vier; senão busca do store
-            #    normaliza para Unix seconds e aplica +1s para evitar duplicatas
+            # 3) timestamp inicial
             def _to_unix_seconds(dt_or_ts):
                 from datetime import datetime, timezone
                 if dt_or_ts is None:
@@ -663,42 +662,37 @@ class KommoAPI:
                 if isinstance(dt_or_ts, (int, float)):
                     return int(dt_or_ts)
                 if isinstance(dt_or_ts, str):
-                    # tenta int direto; senão, parse ISO
                     if dt_or_ts.isdigit():
                         return int(dt_or_ts)
-                    # fallback: ISO / RFC-like
                     try:
-                        # usa seu parser se tiver; senão datetime.fromisoformat
                         return int(
                             datetime.fromisoformat(
                                 dt_or_ts.replace('Z', '+00:00')).timestamp())
                     except Exception:
-                        pass
+                        return None
                 if isinstance(dt_or_ts, datetime):
                     if dt_or_ts.tzinfo is None:
                         dt_or_ts = dt_or_ts.replace(tzinfo=timezone.utc)
                     return int(dt_or_ts.timestamp())
-                # último recurso: deixa None
                 return None
 
             from_store = self._get_last_sync_timestamp(company_id)
             base_from_ts = _to_unix_seconds(
                 last_sync_date) or _to_unix_seconds(from_store) or 0
-            # +1s para não reprocessar exatamente o último segundo salvo
             from_timestamp = base_from_ts + 1 if base_from_ts else 0
             logger.info(
                 f"Starting incremental sync from (unix): {from_timestamp}")
 
-            # 4) limites de paginação
+            # 4) paginação
             limits = self._get_safe_pagination_limits()
             page_size = int(limits.get("page_size", 250))
             max_pages = int(limits.get("max_pages_per_request", 200))
 
-            # 5) coletor + dedup (por id)
+            # 5) coletores
             events_by_id = {}
             max_created_at_seen = 0
 
-            # 6) ids já existentes para não inserir duplicado (mas NÃO paramos a paginação por isso)
+            # 6) ids existentes
             existing_activity_ids = set()
             if getattr(self, "supabase_client", None) and company_id:
                 try:
@@ -718,8 +712,7 @@ class KommoAPI:
                     logger.warning(
                         f"Could not load existing activity IDs: {e}")
 
-            # 7) para cada tipo, paginar SEM filtrar entity=lead (deixa a API retornar contatos tb)
-            #    e sem estratégia de “parar cedo” por páginas sem novos — vamos até o fim real.
+            # 7) loop por tipo
             for event_type in requested_event_types:
                 logger.info(
                     f"Fetching type='{event_type}' from {from_timestamp}")
@@ -728,13 +721,10 @@ class KommoAPI:
                     params = {
                         "page": page,
                         "limit": page_size,
-                        # "filter[entity]": "lead",  # ⚠️ REMOVIDO: isso escondia eventos de 'contact'
                         "filter[type]": event_type,
                     }
-                    # aplica filtro incremental só se houver referência
                     if from_timestamp:
                         params["filter[created_at][from]"] = from_timestamp
-                    # manter ordenação por created_at desc ajuda no corte incremental, mas não confie pra parar cedo
                     params["order[created_at]"] = "desc"
 
                     try:
@@ -742,7 +732,6 @@ class KommoAPI:
                     except Exception as e:
                         logger.error(
                             f"Request error for {event_type} page {page}: {e}")
-                        # p/ erros 4xx irrecuperáveis, não bloqueia os outros tipos
                         if "400" in str(e) or "Bad Request" in str(e):
                             logger.warning(
                                 f"Skipping {event_type} due to API error")
@@ -752,7 +741,6 @@ class KommoAPI:
                         continue
 
                     if not isinstance(resp, dict) or not resp.get("_embedded"):
-                        # nada mais
                         logger.info(
                             f"{event_type} page {page}: empty/invalid response -> stopping"
                         )
@@ -766,27 +754,21 @@ class KommoAPI:
 
                     added_now = 0
                     for ev in evs:
-                        if not isinstance(ev, dict):
+                        if not isinstance(
+                                ev, dict) or ev.get("type") != event_type:
                             continue
-                        if ev.get("type") != event_type:
-                            # segurança extra; algumas APIs retornam mix
-                            continue
-
                         ev_id = str(ev.get("id"))
                         if not ev_id or ev_id == "None":
                             continue
 
-                        created_at = ev.get("created_at")
                         try:
-                            created_at_int = int(
-                                created_at) if created_at is not None else 0
+                            created_at_int = int(ev.get("created_at") or 0)
                         except Exception:
                             created_at_int = 0
 
                         if created_at_int > max_created_at_seen:
                             max_created_at_seen = created_at_int
 
-                        # dedup “nesta coleta” e “já persistidos”
                         if ev_id not in events_by_id and ev_id not in existing_activity_ids:
                             events_by_id[ev_id] = ev
                             added_now += 1
@@ -795,7 +777,6 @@ class KommoAPI:
                         f"{event_type} page {page}: got {len(evs)}; new added: {added_now}"
                     )
 
-                    # se retornou menos que page_size, acabaram as páginas
                     if len(evs) < page_size:
                         break
 
@@ -804,7 +785,7 @@ class KommoAPI:
 
                 logger.info(f"{event_type}: finished pagination")
 
-            # 8) atualizar last sync se coletou algo
+            # 8) atualizar last sync
             if max_created_at_seen and getattr(self, "supabase_client", None):
                 from datetime import datetime, timezone
                 try:
@@ -826,7 +807,49 @@ class KommoAPI:
                 f"Total NEW activities collected (deduplicated): {len(all_events)}"
             )
 
-            # 9) processamento
+            # 9) processamento robusto
+            def as_dict(x):
+                return x if isinstance(x, dict) else {}
+
+            def as_list(x):
+                return x if isinstance(x, list) else []
+
+            def first_dict(lst):
+                for item in as_list(lst):
+                    if isinstance(item, dict):
+                        return item
+                return None
+
+            def extract_lead_id_from_payload(payload):
+                d = as_dict(payload)
+                leads = d.get("leads")
+                if isinstance(leads, list) and leads:
+                    ld0 = first_dict(leads)
+                    if ld0:
+                        return ld0.get("id")
+                if isinstance(d.get("lead"), dict):
+                    return d["lead"].get("id")
+                if "lead_id" in d:
+                    return d.get("lead_id")
+                return None
+
+            def extract_message(payload):
+                d = as_dict(payload)
+                text = d.get("text") or d.get("message") or d.get("body")
+                src = d.get("source") or d.get("channel") or d.get("provider")
+                if not text and isinstance(d.get("data"), dict):
+                    dd = d["data"]
+                    text = dd.get("text") or dd.get("message") or text
+                    src = dd.get("source") or src
+                return text, src
+
+            def to_dt_from_unix(ts):
+                from datetime import datetime, timezone
+                try:
+                    return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+                except Exception:
+                    return None
+
             type_mapping = {
                 "lead_status_changed": "mudança_status",
                 "outgoing_chat_message": "mensagem_enviada",
@@ -838,79 +861,41 @@ class KommoAPI:
             for activity in all_events:
                 if not isinstance(activity, dict) or not activity.get("id"):
                     continue
-
                 activity_type = activity.get("type") or "unknown"
                 entity_type = activity.get("entity_type", "")
                 entity_id = activity.get("entity_id")
 
-                # tentar determinar lead_id
+                va_raw = activity.get("value_after")
+                vb_raw = activity.get("value_before")
+                va = as_dict(va_raw)
+                vb = as_dict(vb_raw)
+
                 lead_id = None
                 if entity_type == "lead":
                     lead_id = entity_id
                 elif entity_type == "contact":
-                    va = activity.get("value_after") or {}
-                    vb = activity.get("value_before") or {}
+                    lead_id = extract_lead_id_from_payload(
+                        va) or extract_lead_id_from_payload(vb)
 
-                    # value_after.leads[0].id
-                    leads_va = va.get("leads") or []
-                    if isinstance(leads_va, list) and leads_va:
-                        ld0 = leads_va[0]
-                        if isinstance(ld0, dict):
-                            lead_id = ld0.get("id")
-
-                    # fallback: value_before.leads[0].id
-                    if lead_id is None:
-                        leads_vb = vb.get("leads") or []
-                        if isinstance(leads_vb, list) and leads_vb:
-                            ld0 = leads_vb[0]
-                            if isinstance(ld0, dict):
-                                lead_id = ld0.get("id")
-
-                    # fallback: *_lead_id direto
-                    if lead_id is None and isinstance(va, dict):
-                        lead_id = va.get("lead_id")
-                    if lead_id is None and isinstance(vb, dict):
-                        lead_id = vb.get("lead_id")
-
-                # normalizar lead_id numérico quando der
                 try:
                     if lead_id is not None and str(lead_id).isdigit():
                         lead_id = int(lead_id)
                 except Exception:
                     pass
 
-                # Safely get value_after and value_before, ensuring they are dicts
-                value_after_raw = activity.get("value_after")
-                value_before_raw = activity.get("value_before")
-                
-                va = value_after_raw if isinstance(value_after_raw, dict) else {}
-                vb = value_before_raw if isinstance(value_before_raw, dict) else {}
-
                 message_text = message_source = None
-                if activity_type == "outgoing_chat_message":
-                    message_text = va.get("text", "") if va else ""
-                    message_source = va.get("source", "") if va else ""
-
                 status_before = status_after = None
-                if activity_type == "lead_status_changed":
-                    status_before = vb.get("status_id") if vb else None
-                    status_after = va.get("status_id") if va else None
-
                 old_responsible = new_responsible = None
+                if activity_type == "outgoing_chat_message":
+                    message_text, message_source = extract_message(va)
+                if activity_type == "lead_status_changed":
+                    status_before = vb.get("status_id")
+                    status_after = va.get("status_id")
                 if activity_type == "entity_responsible_changed":
-                    old_responsible = vb.get("responsible_user_id") if vb else None
-                    new_responsible = va.get("responsible_user_id") if va else None
+                    old_responsible = vb.get("responsible_user_id")
+                    new_responsible = va.get("responsible_user_id")
 
-                # parse created_at -> datetime (assumindo unix seconds)
-                criado_em = None
-                try:
-                    from datetime import datetime, timezone
-                    ca = activity.get("created_at")
-                    if ca is not None:
-                        criado_em = datetime.fromtimestamp(int(ca),
-                                                           tz=timezone.utc)
-                except Exception:
-                    pass
+                criado_em = to_dt_from_unix(activity.get("created_at"))
 
                 if lead_id is None:
                     activities_without_lead_id += 1
@@ -918,7 +903,7 @@ class KommoAPI:
                         logger.warning(
                             f"Activity {activity.get('id')} has no lead_id - entity_type: {entity_type}, "
                             f"entity_id: {entity_id}, type: {activity_type}, "
-                            f"value_after keys: {list((va or {}).keys()) if va else 'None'}"
+                            f"value_after type: {type(va_raw).__name__}, value_before type: {type(vb_raw).__name__}"
                         )
 
                 processed.append({
@@ -931,9 +916,9 @@ class KommoAPI:
                     "tipo":
                     type_mapping.get(activity_type, "outro"),
                     "valor_anterior":
-                    activity.get("value_before"),
+                    vb_raw,
                     "valor_novo":
-                    activity.get("value_after"),
+                    va_raw,
                     "status_anterior":
                     status_before,
                     "status_novo":
@@ -959,23 +944,13 @@ class KommoAPI:
                 logger.warning("No valid activities after processing")
                 return df
 
-            # enriquecer/ordenar
             if "criado_em" in df.columns:
-                df = df.sort_values("criado_em").reset_index(drop=True)
                 try:
+                    df = df.sort_values("criado_em").reset_index(drop=True)
                     df["dia_semana"] = df["criado_em"].dt.strftime("%A")
                     df["hora"] = df["criado_em"].dt.hour
-                except Exception:
-                    pass
-
-            logger.info(
-                f"Activity processing completed successfully: {len(df)} NEW activities"
-            )
-
-            if activities_without_lead_id > 0:
-                logger.warning(
-                    f"Found {activities_without_lead_id} activities without lead_id out of {len(processed)} total activities"
-                )
+                except Exception as e:
+                    logger.warning(f"Failed to enrich datetime columns: {e}")
 
             return df
 
