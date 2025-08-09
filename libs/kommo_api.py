@@ -770,6 +770,7 @@ class KommoAPI:
                     params = {
                         "page": page,
                         "limit": page_size,
+                        "filter[entity]": "lead",
                         "filter[type]": event_type,
                     }
 
@@ -801,9 +802,10 @@ class KommoAPI:
                     # Processar e salvar atividades em tempo real
                     batch_to_save = []
                     added_now = 0
-                    
+
                     for ev in evs:
-                        if not isinstance(ev, dict) or ev.get("type") != event_type:
+                        if not isinstance(
+                                ev, dict) or ev.get("type") != event_type:
                             continue
                         ev_id = str(ev.get("id"))
                         if not ev_id or ev_id == "None":
@@ -838,7 +840,8 @@ class KommoAPI:
                         if entity_type == "lead":
                             lead_id = entity_id
                         elif entity_type == "contact":
-                            lead_id = extract_lead_id_from_payload(va) or extract_lead_id_from_payload(vb)
+                            lead_id = extract_lead_id_from_payload(
+                                va) or extract_lead_id_from_payload(vb)
 
                         try:
                             if lead_id is not None and str(lead_id).isdigit():
@@ -849,7 +852,7 @@ class KommoAPI:
                         message_text = message_source = None
                         status_before = status_after = None
                         old_responsible = new_responsible = None
-                        
+
                         if activity_type == "outgoing_chat_message":
                             message_text, message_source = extract_message(va)
                         if activity_type == "lead_status_changed":
@@ -881,36 +884,45 @@ class KommoAPI:
                             "company_id": company_id,
                             "updated_at": datetime.now().isoformat()
                         }
-                        
+
                         batch_to_save.append(processed_activity)
 
                     # Salvar batch no banco de dados imediatamente
-                    if batch_to_save and getattr(self, "supabase_client", None):
+                    if batch_to_save and getattr(self, "supabase_client",
+                                                 None):
                         try:
                             # Preparar dados para inserção
                             activities_data = []
                             for activity in batch_to_save:
                                 # Converter datetime para ISO format se necessário
-                                if activity.get("criado_em") and hasattr(activity["criado_em"], 'isoformat'):
-                                    activity["criado_em"] = activity["criado_em"].isoformat()
-                                
+                                if activity.get("criado_em") and hasattr(
+                                        activity["criado_em"], 'isoformat'):
+                                    activity["criado_em"] = activity[
+                                        "criado_em"].isoformat()
+
                                 # Validar campos obrigatórios
                                 if activity.get("id"):
                                     activities_data.append(activity)
 
                             if activities_data:
                                 # Usar upsert para inserir/atualizar
-                                result = self.supabase_client.client.table("activities").upsert(
-                                    activities_data, on_conflict='id'
-                                ).execute()
-                                
+                                result = self.supabase_client.client.table(
+                                    "activities").upsert(
+                                        activities_data,
+                                        on_conflict='id').execute()
+
                                 if hasattr(result, "error") and result.error:
-                                    logger.error(f"Error saving activities batch: {result.error}")
+                                    logger.error(
+                                        f"Error saving activities batch: {result.error}"
+                                    )
                                 else:
-                                    logger.info(f"Saved {len(activities_data)} activities to database in real-time")
-                        
+                                    logger.info(
+                                        f"Saved {len(activities_data)} activities to database in real-time"
+                                    )
+
                         except Exception as save_error:
-                            logger.error(f"Error saving activities batch: {save_error}")
+                            logger.error(
+                                f"Error saving activities batch: {save_error}")
 
                     logger.info(
                         f"{event_type} page {page}: got {len(evs)}; new added: {added_now}"
