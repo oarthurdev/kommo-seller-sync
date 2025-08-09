@@ -863,8 +863,21 @@ class KommoAPI:
                             status_before = vb.get("status_id")
                             status_after = va.get("status_id")
                         if activity_type == "entity_responsible_changed":
-                            old_responsible = vb.get("responsible_user_id")
-                            new_responsible = va.get("responsible_user_id")
+                            # Extract responsible user IDs from the JSON structure
+                            old_responsible = None
+                            new_responsible = None
+                            
+                            # Extract from valor_anterior (vb_raw)
+                            if isinstance(vb_raw, list) and len(vb_raw) > 0:
+                                if isinstance(vb_raw[0], dict) and "responsible_user" in vb_raw[0]:
+                                    if isinstance(vb_raw[0]["responsible_user"], dict):
+                                        old_responsible = vb_raw[0]["responsible_user"].get("id")
+                            
+                            # Extract from valor_novo (va_raw) 
+                            if isinstance(va_raw, list) and len(va_raw) > 0:
+                                if isinstance(va_raw[0], dict) and "responsible_user" in va_raw[0]:
+                                    if isinstance(va_raw[0]["responsible_user"], dict):
+                                        new_responsible = va_raw[0]["responsible_user"].get("id")
 
                         criado_em = to_dt_from_unix(ev.get("created_at"))
 
