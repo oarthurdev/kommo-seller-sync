@@ -1198,6 +1198,138 @@ class SupabaseClient:
                             if key in ['id', 'company_id']:
                                 continue
 
+
+    def generate_sla_report(self, company_id, start_date=None, end_date=None):
+        """
+        Gera relatório detalhado de SLA para todos os corretores.
+        
+        Args:
+            company_id: ID da empresa
+            start_date: Data inicial (opcional)
+            end_date: Data final (opcional)
+            
+        Returns:
+            dict: Relatório completo de SLA por corretor
+        """
+        try:
+            logger.info(f"Gerando relatório SLA para empresa {company_id}")
+            
+            # Buscar todos os corretores
+            brokers_result = self.client.table("brokers").select("id, nome").eq(
+                "company_id", company_id
+            ).eq("cargo", "Corretor").execute()
+            
+            if not brokers_result.data:
+                logger.warning(f"Nenhum corretor encontrado para empresa {company_id}")
+                return {}
+            
+            # Buscar todas as atividades relevantes
+            activities_query = self.client.table("activities").select("*").eq("company_id", company_id)
+            
+            if start_date:
+                activities_query = activities_query.gte("criado_em", start_date.isoformat())
+            if end_date:
+                activities_query = activities_query.lte("criado_em", end_date.isoformat())
+            
+            activities_result = activities_query.execute()
+            
+            if not activities_result.data:
+                logger.warning("Nenhuma atividade encontrada para o período")
+                return {}
+            
+            all_activities = pd.DataFrame(activities_result.data)
+            
+            # Gerar relatório por corretor
+            sla_report = {}
+            
+            for broker in brokers_result.data:
+                broker_id = broker['id']
+                broker_name = broker['nome']
+                
+                logger.info(f"Calculando SLA para {broker_name} (ID: {broker_id})")
+                
+                perdas_inatividade = self._calculate_leads_perdidos_por_inatividade(
+                    broker_id, all_activities, company_id
+                )
+                
+                sla_report[broker_id] = {
+                    'nome': broker_name,
+                    'leads_perdidos_inatividade': perdas_inatividade,
+                    'sla_status': 'CRÍTICO' if perdas_inatividade > 5 else 'ATENÇÃO' if perdas_inatividade > 2 else 'OK'
+                }
+            
+            logger.info(f"Relatório SLA gerado para {len(sla_report)} corretores")
+            return sla_report
+            
+        except Exception as e:
+            logger.error(f"Erro ao gerar relatório SLA: {e}")
+            return {}
+    
+    def save_sla_metrics(self, company_id):
+        """
+        Salva métricas de SLA em uma tabela específica para monitoramento.
+        """
+        try:
+            logger.info(f"Salvando métricas SLA para empresa {company_id}")
+            
+            sla_report = self.generate_sla_report(company_id)
+            
+            if not sla_report:
+                logger.warning("Nenhuma métrica SLA para salvar")
+                return
+            
+            # Preparar dados para inserção
+            sla_metrics = []
+            current_time = datetime.now().isoformat()
+            
+            for broker_id, metrics in sla_report.items():
+                sla_metrics.append({
+                    'company_id': company_id,
+                    'broker_id': broker_id,
+                    'broker_name': metrics['nome'],
+                    'leads_perdidos_inatividade': metrics['leads_perdidos_inatividade'],
+                    'sla_status': metrics['sla_status'],
+                    'calculated_at': current_time,
+                    'period_start': datetime.now().replace(day=1).isoformat(),  # Início do mês
+                    'period_end': current_time
+                })
+            
+            # Salvar na tabela sla_metrics (criar se não existir)
+            try:
+                result = self.client.table("sla_metrics").upsert(
+                    sla_metrics, 
+                    on_conflict='company_id,broker_id,calculated_at'
+                ).execute()
+                
+                if hasattr(result, "error") and result.error:
+                    logger.error(f"Erro ao salvar métricas SLA: {result.error}")
+                else:
+                    logger.info(f"Métricas SLA salvas: {len(sla_metrics)} registros")
+                    
+            except Exception as table_error:
+                logger.warning(f"Tabela sla_metrics pode não existir: {table_error}")
+                logger.info("Para criar a tabela sla_metrics, execute no Supabase:")
+                logger.info("""
+                CREATE TABLE sla_metrics (
+                    id SERIAL PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    broker_id BIGINT NOT NULL,
+                    broker_name TEXT,
+                    leads_perdidos_inatividade INTEGER DEFAULT 0,
+                    sla_status TEXT,
+                    calculated_at TIMESTAMP,
+                    period_start TIMESTAMP,
+                    period_end TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(company_id, broker_id, calculated_at)
+                );
+                """)
+            
+        except Exception as e:
+            logger.error(f"Erro ao salvar métricas SLA: {e}")
+
+
+
                             existing_value = existing_data.get(key)
                             if existing_value != new_value:
                                 if isinstance(existing_value, (int, float)) and isinstance(new_value, (int, float)):
@@ -1235,6 +1367,14 @@ class SupabaseClient:
             
             # Calculate dynamic metrics after broker points
             self.calculate_dynamic_metrics(company_id)
+            
+            # Generate and save SLA metrics
+            try:
+                self.save_sla_metrics(company_id)
+                logger.info("SLA metrics generated and saved successfully")
+            except Exception as sla_error:
+                logger.error(f"Error generating SLA metrics: {sla_error}")
+                # Don't fail the entire process if SLA metrics fail
 
         except Exception as e:
             logger.error(f"Error updating broker points: {str(e)}")
@@ -1653,10 +1793,28 @@ class SupabaseClient:
 
             elif rule_name == "leads_perdidos":
                 # Nova lógica: leads perdidos por inatividade (27 minutos sem resposta)
-                return self._calculate_leads_perdidos_por_inatividade(
-                    broker_activities.get('user_id', pd.Series()).iloc[0] if not broker_activities.empty else None,
-                    all_activities, company_id
+                logger.debug(f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para broker {rule_name}")
+                logger.debug(f"Broker activities shape: {broker_activities.shape if not broker_activities.empty else 'Empty'}")
+                logger.debug(f"All activities shape: {all_activities.shape if not all_activities.empty else 'Empty'}")
+                
+                # Extrair broker_id das atividades do corretor
+                current_broker_id = None
+                if not broker_activities.empty and 'user_id' in broker_activities.columns:
+                    user_ids = broker_activities['user_id'].dropna().unique()
+                    if len(user_ids) > 0:
+                        current_broker_id = user_ids[0]
+                        logger.debug(f"Broker ID identificado: {current_broker_id}")
+                
+                if current_broker_id is None:
+                    logger.debug("❌ Nenhum broker ID identificado - retornando 0")
+                    return 0
+                
+                result = self._calculate_leads_perdidos_por_inatividade(
+                    current_broker_id, all_activities, company_id
                 )
+                
+                logger.debug(f"🏁 RESULTADO LEADS_PERDIDOS: {result}")
+                return result
 
             elif rule_name == "leads_descartados":
                 # Antiga lógica de leads_perdidos - leads descartados por status
@@ -1714,70 +1872,249 @@ class SupabaseClient:
 
     def _calculate_leads_perdidos_por_inatividade(self, broker_id, all_activities, company_id):
         """
-        Calcula leads perdidos por inatividade baseado na regra:
-        - Lead atribuído a um corretor
-        - Se após 27 minutos o corretor não enviar mensagem, lead é transferido para outro corretor
-        - Isso conta como 1 lead perdido por inatividade para o corretor anterior
+        Calcula leads perdidos por inatividade usando máquina de estados SLA.
+        
+        Regra:
+        1. Lead entra em etapa "Sem Contato" e tem responsável definido -> INICIA RELÓGIO
+        2. Se troca responsável enquanto em "Sem Contato" -> REINICIA RELÓGIO  
+        3. Se broker envia mensagem -> ZERA RELÓGIO (salvo)
+        4. Se troca responsável após >= 27min sem mensagem -> CONTA PERDA + REINICIA
+        
+        Args:
+            broker_id: ID do corretor
+            all_activities: DataFrame com todas as atividades 
+            company_id: ID da empresa
+            
+        Returns:
+            int: Número de leads perdidos por inatividade
         """
         try:
             if broker_id is None or all_activities.empty:
+                logger.debug(f"Broker {broker_id}: No data to process")
                 return 0
 
             # Converter broker_id para o tipo correto
             broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
             
-            leads_perdidos_count = 0
+            logger.debug(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} ===")
             
-            # Buscar todas as mudanças de responsável onde este broker foi removido
-            responsibility_changes = all_activities[
-                (all_activities.get('tipo', '') == 'mudança_responsável') &
-                (all_activities.get('responsavel_anterior', pd.Series()) == broker_id)
-            ].copy()
-
-            if responsibility_changes.empty:
+            # Buscar etapa "Sem Contato" na tabela stages_list
+            sem_contato_stage_id = None
+            try:
+                stages_result = self.client.table("stages_list").select("stage_id").eq(
+                    "stage_name", "Sem Contato"
+                ).execute()
+                
+                if stages_result.data:
+                    sem_contato_stage_id = stages_result.data[0]['stage_id']
+                    logger.debug(f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}")
+                else:
+                    logger.warning("Etapa 'Sem Contato' não encontrada na tabela stages_list")
+                    return 0
+            except Exception as e:
+                logger.error(f"Erro ao buscar etapa 'Sem Contato': {e}")
                 return 0
 
-            # Para cada mudança de responsável, verificar se houve inatividade
-            for _, change in responsibility_changes.iterrows():
-                lead_id = change.get('lead_id')
-                change_time = change.get('criado_em')
-                
-                if pd.isna(lead_id) or pd.isna(change_time):
+            # Filtrar atividades relevantes para SLA
+            relevant_activities = all_activities[
+                (all_activities['lead_id'].notna()) &
+                (all_activities['criado_em'].notna())
+            ].copy()
+            
+            if relevant_activities.empty:
+                logger.debug(f"Broker {broker_id}: Nenhuma atividade relevante encontrada")
+                return 0
+
+            logger.debug(f"Total de atividades relevantes: {len(relevant_activities)}")
+            
+            # Agrupar atividades por lead_id para processamento
+            leads_perdidos_count = 0
+            leads_processados = set()
+            
+            # Buscar todos os leads únicos nas atividades
+            unique_leads = relevant_activities['lead_id'].unique()
+            logger.debug(f"Leads únicos para processar: {len(unique_leads)}")
+            
+            for lead_id in unique_leads:
+                if pd.isna(lead_id):
                     continue
-
-                # Buscar quando este broker recebeu a responsabilidade do lead
-                previous_assignment = all_activities[
-                    (all_activities.get('lead_id') == lead_id) &
-                    (all_activities.get('tipo', '') == 'mudança_responsável') &
-                    (all_activities.get('responsavel_novo', pd.Series()) == broker_id) &
-                    (all_activities.get('criado_em', pd.Series()) < change_time)
-                ].sort_values('criado_em', ascending=False)
-
-                if previous_assignment.empty:
+                    
+                lead_id = int(lead_id)
+                if lead_id in leads_processados:
                     continue
-
-                assignment_time = previous_assignment.iloc[0]['criado_em']
+                    
+                leads_processados.add(lead_id)
                 
-                # Verificar se o broker enviou alguma mensagem entre a atribuição e a mudança
-                messages_sent = all_activities[
-                    (all_activities.get('lead_id') == lead_id) &
-                    (all_activities.get('user_id', pd.Series()) == broker_id) &
-                    (all_activities.get('tipo', '') == 'mensagem_enviada') &
-                    (all_activities.get('criado_em', pd.Series()) >= assignment_time) &
-                    (all_activities.get('criado_em', pd.Series()) <= change_time)
-                ]
+                # Filtrar atividades deste lead e ordenar por data
+                lead_activities = relevant_activities[
+                    relevant_activities['lead_id'] == lead_id
+                ].sort_values('criado_em')
+                
+                if lead_activities.empty:
+                    continue
+                
+                logger.debug(f"\n--- PROCESSANDO LEAD {lead_id} ---")
+                logger.debug(f"Atividades do lead: {len(lead_activities)}")
+                
+                # Máquina de estados para este lead
+                perdas_lead = self._process_lead_sla_state_machine(
+                    lead_id, lead_activities, sem_contato_stage_id, broker_id
+                )
+                
+                if perdas_lead > 0:
+                    leads_perdidos_count += perdas_lead
+                    logger.debug(f"Lead {lead_id}: {perdas_lead} perdas por inatividade para broker {broker_id}")
 
-                # Se não enviou mensagem, conta como lead perdido por inatividade
-                if messages_sent.empty:
-                    # Verificar se passou mais de 27 minutos
-                    time_diff = (change_time - assignment_time).total_seconds() / 60
-                    if time_diff >= 27:
-                        leads_perdidos_count += 1
-                        logger.debug(f"Lead {lead_id} perdido por inatividade do broker {broker_id} - {time_diff:.1f} minutos sem resposta")
-
-            logger.info(f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade")
+            logger.info(f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)")
             return leads_perdidos_count
 
         except Exception as e:
-            logger.error(f"Error calculating leads_perdidos_por_inatividade for broker {broker_id}: {str(e)}")
+            logger.error(f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return 0
+    
+    def _process_lead_sla_state_machine(self, lead_id, lead_activities, sem_contato_stage_id, target_broker_id):
+        """
+        Processa a máquina de estados SLA para um lead específico.
+        
+        Estados:
+        - IDLE: Lead não está em "Sem Contato" ou sem responsável
+        - COUNTING: Lead em "Sem Contato" com responsável, contando tempo
+        - SAVED: Responsável enviou mensagem, SLA cumprido
+        """
+        try:
+            logger.debug(f"\n    *** MÁQUINA DE ESTADOS - LEAD {lead_id} ***")
+            
+            perdas_broker = 0
+            current_state = "IDLE"
+            current_responsible = None
+            clock_start_time = None
+            
+            # Ordenar atividades por timestamp
+            activities_sorted = lead_activities.sort_values('criado_em')
+            
+            logger.debug(f"    Atividades ordenadas: {len(activities_sorted)}")
+            
+            for idx, (_, activity) in enumerate(activities_sorted.iterrows()):
+                activity_time = activity['criado_em']
+                activity_type = activity.get('tipo', '')
+                user_id = activity.get('user_id')
+                
+                logger.debug(f"    [{idx+1}] {activity_time} | {activity_type} | user: {user_id}")
+                
+                # EVENTO: Mudança de status para "Sem Contato"
+                if (activity_type == 'mudança_status' and 
+                    activity.get('status_novo') == sem_contato_stage_id):
+                    
+                    logger.debug(f"        → Lead entrou em 'Sem Contato'")
+                    
+                    # Buscar quem é o responsável atual
+                    # Pode estar na mesma atividade ou precisar buscar próxima mudança de responsável
+                    responsible_in_status = self._get_responsible_at_time(
+                        lead_activities, activity_time
+                    )
+                    
+                    if responsible_in_status:
+                        current_responsible = responsible_in_status
+                        current_state = "COUNTING"
+                        clock_start_time = activity_time
+                        logger.debug(f"        → INICIOU RELÓGIO para responsável {current_responsible}")
+                        logger.debug(f"        → Estado: {current_state}")
+                
+                # EVENTO: Mudança de responsável enquanto em "Sem Contato"
+                elif (activity_type == 'mudança_responsável' and 
+                      current_state == "COUNTING"):
+                    
+                    old_responsible = activity.get('responsavel_anterior')
+                    new_responsible = activity.get('responsavel_novo')
+                    
+                    logger.debug(f"        → Mudança responsável: {old_responsible} → {new_responsible}")
+                    
+                    if old_responsible == current_responsible and clock_start_time:
+                        # Verificar se passou tempo suficiente (27 min)
+                        time_diff_minutes = (activity_time - clock_start_time).total_seconds() / 60
+                        logger.debug(f"        → Tempo decorrido: {time_diff_minutes:.1f} min")
+                        
+                        if time_diff_minutes >= 27:
+                            # SLA VIOLADO - contar perda se for o broker alvo
+                            if old_responsible == target_broker_id:
+                                perdas_broker += 1
+                                logger.debug(f"        → ❌ SLA VIOLADO! Perda contabilizada para broker {target_broker_id}")
+                            else:
+                                logger.debug(f"        → SLA violado, mas não é o broker alvo ({target_broker_id})")
+                        else:
+                            logger.debug(f"        → Mudança antes de 27 min - não conta como perda")
+                    
+                    # REINICIAR relógio com novo responsável
+                    if new_responsible:
+                        current_responsible = new_responsible
+                        current_state = "COUNTING"
+                        clock_start_time = activity_time
+                        logger.debug(f"        → REINICIOU RELÓGIO para novo responsável {new_responsible}")
+                
+                # EVENTO: Mensagem enviada pelo responsável atual (SALVA SLA)
+                elif (activity_type == 'mensagem_enviada' and 
+                      current_state == "COUNTING" and
+                      user_id == current_responsible):
+                    
+                    if clock_start_time:
+                        time_diff_minutes = (activity_time - clock_start_time).total_seconds() / 60
+                        logger.debug(f"        → ✅ MENSAGEM ENVIADA pelo responsável {user_id}")
+                        logger.debug(f"        → Tempo até resposta: {time_diff_minutes:.1f} min")
+                        logger.debug(f"        → SLA CUMPRIDO - parando relógio")
+                    
+                    current_state = "SAVED"
+                    clock_start_time = None
+                
+                # EVENTO: Mudança de status para fora de "Sem Contato"
+                elif (activity_type == 'mudança_status' and 
+                      activity.get('status_anterior') == sem_contato_stage_id and
+                      activity.get('status_novo') != sem_contato_stage_id):
+                    
+                    logger.debug(f"        → Lead saiu de 'Sem Contato'")
+                    logger.debug(f"        → PARANDO todos os relógios - Estado: IDLE")
+                    current_state = "IDLE"
+                    current_responsible = None
+                    clock_start_time = None
+            
+            # Verificar se ainda está contando no final (sem mudança final)
+            if current_state == "COUNTING" and current_responsible == target_broker_id and clock_start_time:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                final_time_diff = (now - clock_start_time).total_seconds() / 60
+                
+                if final_time_diff >= 27:
+                    logger.debug(f"        → ⏰ RELÓGIO AINDA ATIVO - {final_time_diff:.1f} min sem resposta")
+                    # Poderia contar como perda, mas depende da regra de negócio
+                    # Por ora, só conta perdas quando há troca explícita
+                else:
+                    logger.debug(f"        → Relógio ativo há {final_time_diff:.1f} min - ainda dentro do prazo")
+            
+            logger.debug(f"    *** FIM MÁQUINA DE ESTADOS - PERDAS: {perdas_broker} ***")
+            return perdas_broker
+            
+        except Exception as e:
+            logger.error(f"Erro na máquina de estados para lead {lead_id}: {e}")
+            return 0
+    
+    def _get_responsible_at_time(self, lead_activities, target_time):
+        """
+        Busca quem era o responsável pelo lead em um momento específico.
+        """
+        try:
+            # Buscar a mudança de responsável mais recente antes ou no momento target_time
+            responsible_changes = lead_activities[
+                (lead_activities['tipo'] == 'mudança_responsável') &
+                (lead_activities['criado_em'] <= target_time)
+            ].sort_values('criado_em', ascending=False)
+            
+            if not responsible_changes.empty:
+                latest_change = responsible_changes.iloc[0]
+                return latest_change.get('responsavel_novo')
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar responsável no tempo {target_time}: {e}")
+            return None
