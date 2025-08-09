@@ -712,99 +712,7 @@ class KommoAPI:
                     logger.warning(
                         f"Could not load existing activity IDs: {e}")
 
-            # 7) loop por tipo
-            for event_type in requested_event_types:
-                logger.info(
-                    f"Fetching type='{event_type}' from {from_timestamp}")
-                page = 1
-                while page <= max_pages:
-                    params = {
-                        "page": page,
-                        "limit": page_size,
-                        "filter[type]": event_type,
-                    }
-
-                    try:
-                        resp = self._make_request("events", params=params)
-                    except Exception as e:
-                        logger.error(
-                            f"Request error for {event_type} page {page}: {e}")
-                        if "400" in str(e) or "Bad Request" in str(e):
-                            logger.warning(
-                                f"Skipping {event_type} due to API error")
-                            break
-                        page += 1
-                        time.sleep(limits.get("delay_between_pages", 0.3))
-                        continue
-
-                    if not isinstance(resp, dict) or not resp.get("_embedded"):
-                        logger.info(
-                            f"{event_type} page {page}: empty/invalid response -> stopping"
-                        )
-                        break
-
-                    evs = resp["_embedded"].get("events") or []
-                    if not evs:
-                        logger.info(
-                            f"{event_type} page {page}: 0 events -> stopping")
-                        break
-
-                    added_now = 0
-                    for ev in evs:
-                        if not isinstance(
-                                ev, dict) or ev.get("type") != event_type:
-                            continue
-                        ev_id = str(ev.get("id"))
-                        if not ev_id or ev_id == "None":
-                            continue
-
-                        try:
-                            created_at_int = int(ev.get("created_at") or 0)
-                        except Exception:
-                            created_at_int = 0
-
-                        if created_at_int > max_created_at_seen:
-                            max_created_at_seen = created_at_int
-
-                        if ev_id not in events_by_id and ev_id not in existing_activity_ids:
-                            events_by_id[ev_id] = ev
-                            added_now += 1
-
-                    logger.info(
-                        f"{event_type} page {page}: got {len(evs)}; new added: {added_now}"
-                    )
-
-                    if len(evs) < page_size:
-                        break
-
-                    page += 1
-                    time.sleep(limits.get("delay_between_pages", 0.3))
-
-                logger.info(f"{event_type}: finished pagination")
-
-            # 8) atualizar last sync
-            if max_created_at_seen and getattr(self, "supabase_client", None):
-                from datetime import datetime, timezone
-                try:
-                    latest_dt = datetime.fromtimestamp(
-                        int(max_created_at_seen), tz=timezone.utc)
-                    self._save_last_sync_record(company_id, latest_dt)
-                    logger.info(
-                        f"Updated last sync timestamp to: {latest_dt.isoformat()}"
-                    )
-                except Exception as e:
-                    logger.error(f"Error saving last sync timestamp: {e}")
-
-            if not events_by_id:
-                logger.info("No new activities found since last sync")
-                return pd.DataFrame()
-
-            all_events = list(events_by_id.values())
-            logger.info(
-                f"Total NEW activities collected (deduplicated): {len(all_events)}"
-            )
-
-            # 9) processamento robusto
+            # 7) helper functions for processing
             def as_dict(x):
                 return x if isinstance(x, dict) else {}
 
@@ -853,103 +761,193 @@ class KommoAPI:
                 "entity_responsible_changed": "mudança_responsável",
             }
 
-            processed = []
-            activities_without_lead_id = 0
-            for activity in all_events:
-                if not isinstance(activity, dict) or not activity.get("id"):
-                    continue
-                activity_type = activity.get("type") or "unknown"
-                entity_type = activity.get("entity_type", "")
-                entity_id = activity.get("entity_id")
+            # 7) loop por tipo com processamento em tempo real
+            for event_type in requested_event_types:
+                logger.info(
+                    f"Fetching type='{event_type}' from {from_timestamp}")
+                page = 1
+                while page <= max_pages:
+                    params = {
+                        "page": page,
+                        "limit": page_size,
+                        "filter[type]": event_type,
+                    }
 
-                va_raw = activity.get("value_after")
-                vb_raw = activity.get("value_before")
-                va = as_dict(va_raw)
-                vb = as_dict(vb_raw)
+                    try:
+                        resp = self._make_request("events", params=params)
+                    except Exception as e:
+                        logger.error(
+                            f"Request error for {event_type} page {page}: {e}")
+                        if "400" in str(e) or "Bad Request" in str(e):
+                            logger.warning(
+                                f"Skipping {event_type} due to API error")
+                            break
+                        page += 1
+                        time.sleep(limits.get("delay_between_pages", 0.3))
+                        continue
 
-                lead_id = None
-                if entity_type == "lead":
-                    lead_id = entity_id
-                elif entity_type == "contact":
-                    lead_id = extract_lead_id_from_payload(
-                        va) or extract_lead_id_from_payload(vb)
-
-                try:
-                    if lead_id is not None and str(lead_id).isdigit():
-                        lead_id = int(lead_id)
-                except Exception:
-                    pass
-
-                message_text = message_source = None
-                status_before = status_after = None
-                old_responsible = new_responsible = None
-                if activity_type == "outgoing_chat_message":
-                    message_text, message_source = extract_message(va)
-                if activity_type == "lead_status_changed":
-                    status_before = vb.get("status_id")
-                    status_after = va.get("status_id")
-                if activity_type == "entity_responsible_changed":
-                    old_responsible = vb.get("responsible_user_id")
-                    new_responsible = va.get("responsible_user_id")
-
-                criado_em = to_dt_from_unix(activity.get("created_at"))
-
-                if lead_id is None:
-                    activities_without_lead_id += 1
-                    if activities_without_lead_id <= 5:
-                        logger.warning(
-                            f"Activity {activity.get('id')} has no lead_id - entity_type: {entity_type}, "
-                            f"entity_id: {entity_id}, type: {activity_type}, "
-                            f"value_after type: {type(va_raw).__name__}, value_before type: {type(vb_raw).__name__}"
+                    if not isinstance(resp, dict) or not resp.get("_embedded"):
+                        logger.info(
+                            f"{event_type} page {page}: empty/invalid response -> stopping"
                         )
+                        break
 
-                processed.append({
-                    "id":
-                    activity.get("id"),
-                    "lead_id":
-                    lead_id,
-                    "user_id":
-                    activity.get("created_by"),
-                    "tipo":
-                    type_mapping.get(activity_type, "outro"),
-                    "valor_anterior":
-                    vb_raw,
-                    "valor_novo":
-                    va_raw,
-                    "status_anterior":
-                    status_before,
-                    "status_novo":
-                    status_after,
-                    "texto_mensagem":
-                    message_text,
-                    "fonte_mensagem":
-                    message_source,
-                    "responsavel_anterior":
-                    old_responsible,
-                    "responsavel_novo":
-                    new_responsible,
-                    "entity_type":
-                    entity_type,
-                    "entity_id":
-                    entity_id,
-                    "criado_em":
-                    criado_em,
-                })
+                    evs = resp["_embedded"].get("events") or []
+                    if not evs:
+                        logger.info(
+                            f"{event_type} page {page}: 0 events -> stopping")
+                        break
 
-            df = pd.DataFrame(processed)
-            if df.empty:
-                logger.warning("No valid activities after processing")
-                return df
+                    # Processar e salvar atividades em tempo real
+                    batch_to_save = []
+                    added_now = 0
+                    
+                    for ev in evs:
+                        if not isinstance(ev, dict) or ev.get("type") != event_type:
+                            continue
+                        ev_id = str(ev.get("id"))
+                        if not ev_id or ev_id == "None":
+                            continue
 
-            if "criado_em" in df.columns:
+                        try:
+                            created_at_int = int(ev.get("created_at") or 0)
+                        except Exception:
+                            created_at_int = 0
+
+                        if created_at_int > max_created_at_seen:
+                            max_created_at_seen = created_at_int
+
+                        # Verificar se já existe
+                        if ev_id in events_by_id or ev_id in existing_activity_ids:
+                            continue
+
+                        events_by_id[ev_id] = ev
+                        added_now += 1
+
+                        # Processar atividade imediatamente
+                        activity_type = ev.get("type") or "unknown"
+                        entity_type = ev.get("entity_type", "")
+                        entity_id = ev.get("entity_id")
+
+                        va_raw = ev.get("value_after")
+                        vb_raw = ev.get("value_before")
+                        va = as_dict(va_raw)
+                        vb = as_dict(vb_raw)
+
+                        lead_id = None
+                        if entity_type == "lead":
+                            lead_id = entity_id
+                        elif entity_type == "contact":
+                            lead_id = extract_lead_id_from_payload(va) or extract_lead_id_from_payload(vb)
+
+                        try:
+                            if lead_id is not None and str(lead_id).isdigit():
+                                lead_id = int(lead_id)
+                        except Exception:
+                            pass
+
+                        message_text = message_source = None
+                        status_before = status_after = None
+                        old_responsible = new_responsible = None
+                        
+                        if activity_type == "outgoing_chat_message":
+                            message_text, message_source = extract_message(va)
+                        if activity_type == "lead_status_changed":
+                            status_before = vb.get("status_id")
+                            status_after = va.get("status_id")
+                        if activity_type == "entity_responsible_changed":
+                            old_responsible = vb.get("responsible_user_id")
+                            new_responsible = va.get("responsible_user_id")
+
+                        criado_em = to_dt_from_unix(ev.get("created_at"))
+
+                        # Preparar registro para salvar
+                        processed_activity = {
+                            "id": ev.get("id"),
+                            "lead_id": lead_id,
+                            "user_id": ev.get("created_by"),
+                            "tipo": type_mapping.get(activity_type, "outro"),
+                            "valor_anterior": vb_raw,
+                            "valor_novo": va_raw,
+                            "status_anterior": status_before,
+                            "status_novo": status_after,
+                            "texto_mensagem": message_text,
+                            "fonte_mensagem": message_source,
+                            "responsavel_anterior": old_responsible,
+                            "responsavel_novo": new_responsible,
+                            "entity_type": entity_type,
+                            "entity_id": entity_id,
+                            "criado_em": criado_em,
+                            "company_id": company_id,
+                            "updated_at": datetime.now().isoformat()
+                        }
+                        
+                        batch_to_save.append(processed_activity)
+
+                    # Salvar batch no banco de dados imediatamente
+                    if batch_to_save and getattr(self, "supabase_client", None):
+                        try:
+                            # Preparar dados para inserção
+                            activities_data = []
+                            for activity in batch_to_save:
+                                # Converter datetime para ISO format se necessário
+                                if activity.get("criado_em") and hasattr(activity["criado_em"], 'isoformat'):
+                                    activity["criado_em"] = activity["criado_em"].isoformat()
+                                
+                                # Validar campos obrigatórios
+                                if activity.get("id"):
+                                    activities_data.append(activity)
+
+                            if activities_data:
+                                # Usar upsert para inserir/atualizar
+                                result = self.supabase_client.client.table("activities").upsert(
+                                    activities_data, on_conflict='id'
+                                ).execute()
+                                
+                                if hasattr(result, "error") and result.error:
+                                    logger.error(f"Error saving activities batch: {result.error}")
+                                else:
+                                    logger.info(f"Saved {len(activities_data)} activities to database in real-time")
+                        
+                        except Exception as save_error:
+                            logger.error(f"Error saving activities batch: {save_error}")
+
+                    logger.info(
+                        f"{event_type} page {page}: got {len(evs)}; new added: {added_now}"
+                    )
+
+                    if len(evs) < page_size:
+                        break
+
+                    page += 1
+                    time.sleep(limits.get("delay_between_pages", 0.3))
+
+                logger.info(f"{event_type}: finished pagination")
+
+            # 8) atualizar last sync
+            if max_created_at_seen and getattr(self, "supabase_client", None):
+                from datetime import datetime, timezone
                 try:
-                    df = df.sort_values("criado_em").reset_index(drop=True)
-                    df["dia_semana"] = df["criado_em"].dt.strftime("%A")
-                    df["hora"] = df["criado_em"].dt.hour
+                    latest_dt = datetime.fromtimestamp(
+                        int(max_created_at_seen), tz=timezone.utc)
+                    self._save_last_sync_record(company_id, latest_dt)
+                    logger.info(
+                        f"Updated last sync timestamp to: {latest_dt.isoformat()}"
+                    )
                 except Exception as e:
-                    logger.warning(f"Failed to enrich datetime columns: {e}")
+                    logger.error(f"Error saving last sync timestamp: {e}")
 
-            return df
+            if not events_by_id:
+                logger.info("No new activities found since last sync")
+                return pd.DataFrame()
+
+            logger.info(
+                f"Total NEW activities processed and saved in real-time: {len(events_by_id)}"
+            )
+
+            # Retornar DataFrame vazio já que salvamos em tempo real
+            # O sync_manager não precisa mais processar as atividades
+            return pd.DataFrame()
 
         except Exception as e:
             logger.error(f"Failed to retrieve activities: {str(e)}")
