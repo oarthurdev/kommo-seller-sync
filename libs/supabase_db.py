@@ -978,6 +978,7 @@ class SupabaseClient:
                 "propostas_enviadas": 0,
                 "vendas_realizadas": 0,
                 "leads_perdidos": 0,
+                "leads_descartados": 0,
                 "pontos": 0,
                 "updated_at": now
             } for b in brokers_to_insert]
@@ -1179,7 +1180,7 @@ class SupabaseClient:
                     'updated_at': current_time
                 }
 
-                schema_fields = ['leads_visitados', 'propostas_enviadas', 'vendas_realizadas', 'leads_perdidos']
+                schema_fields = ['leads_visitados', 'propostas_enviadas', 'vendas_realizadas', 'leads_perdidos', 'leads_descartados']
                 for rule_name, count in rule_results.items():
                     if rule_name in schema_fields:
                         broker_points_data[rule_name] = count
@@ -1249,7 +1250,8 @@ class SupabaseClient:
                     'leads_visitados': 40,
                     'propostas_enviadas': 8,
                     'vendas_realizadas': 100,
-                    'leads_perdidos': -10
+                    'leads_perdidos': -10,
+                    'leads_descartados': -5
                 }
 
             # Check if company already has rules
@@ -1650,13 +1652,19 @@ class SupabaseClient:
                 return 0
 
             elif rule_name == "leads_perdidos":
-                # Penalização para leads perdidos - buscar atividades de mudança para status "Perdido" no período
+                # Nova lógica: leads perdidos por inatividade (27 minutos sem resposta)
+                return self._calculate_leads_perdidos_por_inatividade(
+                    broker_activities.get('user_id', pd.Series()).iloc[0] if not broker_activities.empty else None,
+                    all_activities, company_id
+                )
+
+            elif rule_name == "leads_descartados":
+                # Antiga lógica de leads_perdidos - leads descartados por status
                 if broker_activities.empty:
                     # Se não há atividades, usar fallback dos leads
                     if not broker_leads.empty and 'status' in broker_leads.columns:
-                        lost_leads = broker_leads[broker_leads['status'] ==
-                                                  'Perdido']
-                        return len(lost_leads)
+                        discarded_leads = broker_leads[broker_leads['status'] == 'Perdido']
+                        return len(discarded_leads)
                     return 0
 
                 # Verificar se a coluna lead_id existe nas atividades
@@ -1666,14 +1674,13 @@ class SupabaseClient:
                     )
                     # Usar fallback dos leads
                     if not broker_leads.empty and 'status' in broker_leads.columns:
-                        lost_leads = broker_leads[broker_leads['status'] ==
-                                                  'Perdido']
-                        return len(lost_leads)
+                        discarded_leads = broker_leads[broker_leads['status'] == 'Perdido']
+                        return len(discarded_leads)
                     return 0
 
                 try:
                     # Buscar atividades de mudança de status para "Perdido" no período filtrado
-                    lost_activities = broker_activities[(
+                    discarded_activities = broker_activities[(
                         broker_activities.get('tipo', '') == 'mudança_status'
                     ) & (broker_activities.get('valor_novo', pd.Series(
                     )).astype(str).str.contains(
@@ -1681,21 +1688,20 @@ class SupabaseClient:
                          )]
 
                     # Se não encontrar por atividade, usar os leads com status Perdido que foram criados no período
-                    if lost_activities.empty and not broker_leads.empty:
-                        lost_leads = broker_leads[broker_leads.get(
+                    if discarded_activities.empty and not broker_leads.empty:
+                        discarded_leads = broker_leads[broker_leads.get(
                             'status', '') == 'Perdido']
-                        return len(lost_leads)
+                        return len(discarded_leads)
 
-                    unique_lost = lost_activities['lead_id'].nunique(
-                    ) if not lost_activities.empty else 0
-                    return unique_lost
+                    unique_discarded = discarded_activities['lead_id'].nunique(
+                    ) if not discarded_activities.empty else 0
+                    return unique_discarded
                 except Exception as e:
-                    logger.warning(f"Error in leads_perdidos calculation: {e}")
+                    logger.warning(f"Error in leads_descartados calculation: {e}")
                     # Fallback para leads com status Perdido
                     if not broker_leads.empty and 'status' in broker_leads.columns:
-                        lost_leads = broker_leads[broker_leads['status'] ==
-                                                  'Perdido']
-                        return len(lost_leads)
+                        discarded_leads = broker_leads[broker_leads['status'] == 'Perdido']
+                        return len(discarded_leads)
                     return 0
 
             else:
@@ -1704,4 +1710,74 @@ class SupabaseClient:
 
         except Exception as e:
             logger.error(f"Error calculating rule {rule_name}: {str(e)}")
+            return 0
+
+    def _calculate_leads_perdidos_por_inatividade(self, broker_id, all_activities, company_id):
+        """
+        Calcula leads perdidos por inatividade baseado na regra:
+        - Lead atribuído a um corretor
+        - Se após 27 minutos o corretor não enviar mensagem, lead é transferido para outro corretor
+        - Isso conta como 1 lead perdido por inatividade para o corretor anterior
+        """
+        try:
+            if broker_id is None or all_activities.empty:
+                return 0
+
+            # Converter broker_id para o tipo correto
+            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
+            
+            leads_perdidos_count = 0
+            
+            # Buscar todas as mudanças de responsável onde este broker foi removido
+            responsibility_changes = all_activities[
+                (all_activities.get('tipo', '') == 'mudança_responsável') &
+                (all_activities.get('responsavel_anterior', pd.Series()) == broker_id)
+            ].copy()
+
+            if responsibility_changes.empty:
+                return 0
+
+            # Para cada mudança de responsável, verificar se houve inatividade
+            for _, change in responsibility_changes.iterrows():
+                lead_id = change.get('lead_id')
+                change_time = change.get('criado_em')
+                
+                if pd.isna(lead_id) or pd.isna(change_time):
+                    continue
+
+                # Buscar quando este broker recebeu a responsabilidade do lead
+                previous_assignment = all_activities[
+                    (all_activities.get('lead_id') == lead_id) &
+                    (all_activities.get('tipo', '') == 'mudança_responsável') &
+                    (all_activities.get('responsavel_novo', pd.Series()) == broker_id) &
+                    (all_activities.get('criado_em', pd.Series()) < change_time)
+                ].sort_values('criado_em', ascending=False)
+
+                if previous_assignment.empty:
+                    continue
+
+                assignment_time = previous_assignment.iloc[0]['criado_em']
+                
+                # Verificar se o broker enviou alguma mensagem entre a atribuição e a mudança
+                messages_sent = all_activities[
+                    (all_activities.get('lead_id') == lead_id) &
+                    (all_activities.get('user_id', pd.Series()) == broker_id) &
+                    (all_activities.get('tipo', '') == 'mensagem_enviada') &
+                    (all_activities.get('criado_em', pd.Series()) >= assignment_time) &
+                    (all_activities.get('criado_em', pd.Series()) <= change_time)
+                ]
+
+                # Se não enviou mensagem, conta como lead perdido por inatividade
+                if messages_sent.empty:
+                    # Verificar se passou mais de 27 minutos
+                    time_diff = (change_time - assignment_time).total_seconds() / 60
+                    if time_diff >= 27:
+                        leads_perdidos_count += 1
+                        logger.debug(f"Lead {lead_id} perdido por inatividade do broker {broker_id} - {time_diff:.1f} minutos sem resposta")
+
+            logger.info(f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade")
+            return leads_perdidos_count
+
+        except Exception as e:
+            logger.error(f"Error calculating leads_perdidos_por_inatividade for broker {broker_id}: {str(e)}")
             return 0
