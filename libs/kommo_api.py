@@ -236,7 +236,7 @@ class KommoAPI:
             500,  # Aumentado para sincronização completa
             'max_total_records':
             50000,  # Aumentado para capturar todos os dados
-            'page_size': 100,  # Mantido para estabilidade
+            'page_size': 250,  # Mantido para estabilidade
             'delay_between_pages':
             0.0  # Removido - rate limiting é feito no _make_request
         }
@@ -723,9 +723,6 @@ class KommoAPI:
                         "limit": page_size,
                         "filter[type]": event_type,
                     }
-                    if from_timestamp:
-                        params["filter[created_at][from]"] = from_timestamp
-                    params["order[created_at]"] = "desc"
 
                     try:
                         resp = self._make_request("events", params=params)
