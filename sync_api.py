@@ -135,10 +135,13 @@ def continuous_sync_worker(company_id, config):
                 else:
                     activities = pd.DataFrame()  # Explicitly handle as None
 
-                if sla_metrics is not None and not sla_metrics.empty:
+                # Handle SLA metrics - it's returned as a list or None, not a DataFrame
+                if sla_metrics is not None and len(sla_metrics) > 0:
+                    # Convert to DataFrame if it's a list with data
+                    sla_metrics = pd.DataFrame(sla_metrics)
                     sla_metrics['company_id'] = company_id
                 else:
-                    sla_metrics = pd.DataFrame()  # Explicitly handle as None
+                    sla_metrics = pd.DataFrame()  # Explicitly handle as empty
 
                 # Log data volumes
                 logger.info(
