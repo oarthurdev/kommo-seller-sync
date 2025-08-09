@@ -1,0 +1,15 @@
+version: '3.3'
+
+services:
+  kommo-seller-sync:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    ports:
+      - "5002:5002"
+    environment:
+      - PORT=5002
+    env_file:
+      - .env
+    restart: always
+    network_mode: host

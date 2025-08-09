@@ -1,0 +1,69 @@
+modules = ["python-3.12"]
+run = "python app.py"
+
+[nix]
+channel = "stable-25_05"
+packages = ["glibcLocales", "openssh"]
+
+[deployment]
+run = ["sh", "-c", "python app.py"]
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
+[[ports]]
+localPort = 5002
+externalPort = 3000
+
+[[ports]]
+localPort = 8501
+externalPort = 80
+
+[workflows]
+runButton = "Continuous Sync API"
+
+[[workflows.workflow]]
+name = "Flask Server"
+author = 41944810
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python server.py"
+
+[[workflows.workflow]]
+name = "FastAPI Server"
+author = 42366945
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python server.py"
+
+[[workflows.workflow]]
+name = "Sync API"
+author = 42603014
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python sync_api.py"
+
+[[workflows.workflow]]
+name = "API Server"
+author = 43053875
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python sync_api.py"
+
+[[workflows.workflow]]
+name = "Continuous Sync API"
+author = 45458206
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python sync_api.py"
