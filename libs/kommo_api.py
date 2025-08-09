@@ -879,25 +879,27 @@ class KommoAPI:
                 except Exception:
                     pass
 
-                va = activity.get("value_after") if isinstance(
-                    activity.get("value_after"), dict) else {}
-                vb = activity.get("value_before") if isinstance(
-                    activity.get("value_before"), dict) else {}
+                # Safely get value_after and value_before, ensuring they are dicts
+                value_after_raw = activity.get("value_after")
+                value_before_raw = activity.get("value_before")
+                
+                va = value_after_raw if isinstance(value_after_raw, dict) else {}
+                vb = value_before_raw if isinstance(value_before_raw, dict) else {}
 
                 message_text = message_source = None
                 if activity_type == "outgoing_chat_message":
-                    message_text = (va or {}).get("text", "")
-                    message_source = (va or {}).get("source", "")
+                    message_text = va.get("text", "") if va else ""
+                    message_source = va.get("source", "") if va else ""
 
                 status_before = status_after = None
                 if activity_type == "lead_status_changed":
-                    status_before = (vb or {}).get("status_id")
-                    status_after = (va or {}).get("status_id")
+                    status_before = vb.get("status_id") if vb else None
+                    status_after = va.get("status_id") if va else None
 
                 old_responsible = new_responsible = None
                 if activity_type == "entity_responsible_changed":
-                    old_responsible = (vb or {}).get("responsible_user_id")
-                    new_responsible = (va or {}).get("responsible_user_id")
+                    old_responsible = vb.get("responsible_user_id") if vb else None
+                    new_responsible = va.get("responsible_user_id") if va else None
 
                 # parse created_at -> datetime (assumindo unix seconds)
                 criado_em = None
