@@ -882,7 +882,7 @@ class KommoAPI:
                             "entity_id": entity_id,
                             "criado_em": criado_em,
                             "company_id": company_id,
-                            "updated_at": datetime.now().isoformat()
+                            "updated_at": datetime.now(timezone.utc).isoformat()
                         }
 
                         batch_to_save.append(processed_activity)
