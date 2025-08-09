@@ -524,22 +524,29 @@ class SupabaseClient:
             if existing_lead_ids is not None and 'lead_id' in activities_df_clean.columns:
                 filter_needed = True
                 original_count = len(activities_df_clean)
-                
+
                 # Convert existing_lead_ids to strings for comparison
-                existing_lead_ids_str = {str(lead_id) for lead_id in existing_lead_ids}
-                
+                existing_lead_ids_str = {
+                    str(lead_id)
+                    for lead_id in existing_lead_ids
+                }
+
                 # Convert lead_id column to string for comparison, keeping NaN as NaN
-                activities_df_clean['lead_id_str'] = activities_df_clean['lead_id'].astype(str)
-                activities_df_clean.loc[activities_df_clean['lead_id'].isna(), 'lead_id_str'] = None
-                
+                activities_df_clean['lead_id_str'] = activities_df_clean[
+                    'lead_id'].astype(str)
+                activities_df_clean.loc[activities_df_clean['lead_id'].isna(),
+                                        'lead_id_str'] = None
+
                 # Filter: keep if lead_id exists in leads table OR if lead_id is null
                 activities_df_clean = activities_df_clean[
-                    activities_df_clean['lead_id_str'].isin(existing_lead_ids_str)
+                    activities_df_clean['lead_id_str'].
+                    isin(existing_lead_ids_str)
                     | activities_df_clean['lead_id'].isna()]
-                
+
                 # Remove the temporary column
-                activities_df_clean = activities_df_clean.drop('lead_id_str', axis=1)
-                
+                activities_df_clean = activities_df_clean.drop('lead_id_str',
+                                                               axis=1)
+
                 filtered_count = len(activities_df_clean)
                 if filtered_count < original_count:
                     logger.warning(
@@ -547,30 +554,42 @@ class SupabaseClient:
                     )
                     # Log some examples of filtered lead_ids for debugging
                     if filtered_count > 0:
-                        sample_valid_leads = activities_df_clean['lead_id'].dropna().head(5).tolist()
-                        logger.info(f"Sample valid lead_ids in activities: {sample_valid_leads}")
-                    logger.info(f"Total existing leads in database: {len(existing_lead_ids_str)}")
+                        sample_valid_leads = activities_df_clean[
+                            'lead_id'].dropna().head(5).tolist()
+                        logger.info(
+                            f"Sample valid lead_ids in activities: {sample_valid_leads}"
+                        )
+                    logger.info(
+                        f"Total existing leads in database: {len(existing_lead_ids_str)}"
+                    )
 
             # Filter by user_id - convert both sides for comparison
             if existing_broker_ids is not None and 'user_id' in activities_df_clean.columns:
                 filter_needed = True
                 original_count = len(activities_df_clean)
-                
+
                 # Convert existing_broker_ids to strings for comparison
-                existing_broker_ids_str = {str(broker_id) for broker_id in existing_broker_ids}
-                
+                existing_broker_ids_str = {
+                    str(broker_id)
+                    for broker_id in existing_broker_ids
+                }
+
                 # Convert user_id column to string for comparison, keeping NaN as NaN
-                activities_df_clean['user_id_str'] = activities_df_clean['user_id'].astype(str)
-                activities_df_clean.loc[activities_df_clean['user_id'].isna(), 'user_id_str'] = None
-                
+                activities_df_clean['user_id_str'] = activities_df_clean[
+                    'user_id'].astype(str)
+                activities_df_clean.loc[activities_df_clean['user_id'].isna(),
+                                        'user_id_str'] = None
+
                 # Filter: keep if user_id exists in brokers table OR if user_id is null
                 activities_df_clean = activities_df_clean[
-                    activities_df_clean['user_id_str'].isin(existing_broker_ids_str)
+                    activities_df_clean['user_id_str'].
+                    isin(existing_broker_ids_str)
                     | activities_df_clean['user_id'].isna()]
-                
+
                 # Remove the temporary column
-                activities_df_clean = activities_df_clean.drop('user_id_str', axis=1)
-                
+                activities_df_clean = activities_df_clean.drop('user_id_str',
+                                                               axis=1)
+
                 filtered_count = len(activities_df_clean)
                 if filtered_count < original_count:
                     logger.warning(
@@ -1004,13 +1023,14 @@ class SupabaseClient:
             return False
 
     def update_broker_points(self,
-                         brokers=[],
-                         leads=[],
-                         activities=[],
-                         company_id=None):
+                             brokers=[],
+                             leads=[],
+                             activities=[],
+                             company_id=None):
         try:
             company_id = company_id or self.kommo_config.get('company_id')
-            logger.info(f"Starting broker points calculation for company {company_id}")
+            logger.info(
+                f"Starting broker points calculation for company {company_id}")
 
             # Convert to DataFrames if needed
             if not isinstance(brokers, pd.DataFrame):
@@ -1022,13 +1042,15 @@ class SupabaseClient:
 
             if not isinstance(leads, pd.DataFrame):
                 if isinstance(leads, list):
-                    leads = pd.DataFrame(leads) if len(leads) > 0 else pd.DataFrame()
+                    leads = pd.DataFrame(leads) if len(
+                        leads) > 0 else pd.DataFrame()
                 else:
                     leads = pd.DataFrame()
 
             if not isinstance(activities, pd.DataFrame):
                 if isinstance(activities, list):
-                    activities = pd.DataFrame(activities) if len(activities) > 0 else pd.DataFrame()
+                    activities = pd.DataFrame(activities) if len(
+                        activities) > 0 else pd.DataFrame()
                 else:
                     activities = pd.DataFrame()
 
@@ -1039,15 +1061,18 @@ class SupabaseClient:
             filter_data = {}
 
             try:
-                filter_result = self.client.table("component_filters").select("*").eq(
-                    "component_name", "ranking_metrics"
-                ).eq("company_id", company_id).execute()
+                filter_result = self.client.table("component_filters").select(
+                    "*").eq("component_name",
+                            "ranking_metrics").eq("company_id",
+                                                  company_id).execute()
 
                 if filter_result.data:
                     filter_data = filter_result.data[0]
                     filter_type = filter_data.get('filter_type')
                 else:
-                    logger.info("No component_filters found for ranking_metrics, using all data")
+                    logger.info(
+                        "No component_filters found for ranking_metrics, using all data"
+                    )
 
             except Exception as inner_e:
                 logger.error(f"Erro ao buscar filtro de datas: {inner_e}")
@@ -1065,50 +1090,88 @@ class SupabaseClient:
                 if start_date and end_date:
                     date_filter_start = pd.to_datetime(start_date, utc=True)
                     date_filter_end = pd.to_datetime(end_date, utc=True)
-                    logger.info(f"Using custom date range filter: {date_filter_start} to {date_filter_end}")
+                    logger.info(
+                        f"Using custom date range filter: {date_filter_start} to {date_filter_end}"
+                    )
                 else:
-                    logger.info("Filter type is custom_range but dates are null, using all data")
+                    logger.info(
+                        "Filter type is custom_range but dates are null, using all data"
+                    )
 
             elif filter_type == 'current_month':
-                first_day_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                date_filter_start = pd.to_datetime(first_day_of_month, utc=True)
+                first_day_of_month = now.replace(day=1,
+                                                 hour=0,
+                                                 minute=0,
+                                                 second=0,
+                                                 microsecond=0)
+                date_filter_start = pd.to_datetime(first_day_of_month,
+                                                   utc=True)
                 date_filter_end = pd.to_datetime(now, utc=True)
-                logger.info(f"Using current month filter: {date_filter_start} to {date_filter_end}")
+                logger.info(
+                    f"Using current month filter: {date_filter_start} to {date_filter_end}"
+                )
 
             elif filter_type == 'month':
                 selected_month = int(filter_data.get('month'))
                 selected_year = int(filter_data.get('year'))
 
-                first_day = datetime(selected_year, selected_month, 1, tzinfo=sao_paulo_tz)
+                first_day = datetime(selected_year,
+                                     selected_month,
+                                     1,
+                                     tzinfo=sao_paulo_tz)
                 if selected_month == 12:
-                    next_month = datetime(selected_year + 1, 1, 1, tzinfo=sao_paulo_tz)
+                    next_month = datetime(selected_year + 1,
+                                          1,
+                                          1,
+                                          tzinfo=sao_paulo_tz)
                 else:
-                    next_month = datetime(selected_year, selected_month + 1, 1, tzinfo=sao_paulo_tz)
+                    next_month = datetime(selected_year,
+                                          selected_month + 1,
+                                          1,
+                                          tzinfo=sao_paulo_tz)
 
                 last_day = next_month - timedelta(seconds=1)
 
                 date_filter_start = pd.to_datetime(first_day, utc=True)
                 date_filter_end = pd.to_datetime(last_day, utc=True)
 
-                logger.info(f"Using 'month' filter: {date_filter_start} to {date_filter_end}")
-                
-            elif filter_type == 'last_month':
-                first_day_current_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                last_day_last_month = first_day_current_month - timedelta(days=1)
-                first_day_last_month = last_day_last_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                logger.info(
+                    f"Using 'month' filter: {date_filter_start} to {date_filter_end}"
+                )
 
-                date_filter_start = pd.to_datetime(first_day_last_month, utc=True)
-                date_filter_end = pd.to_datetime(last_day_last_month.replace(hour=23, minute=59, second=59), utc=True)
-                logger.info(f"Using last month filter: {date_filter_start} to {date_filter_end}")
+            elif filter_type == 'last_month':
+                first_day_current_month = now.replace(day=1,
+                                                      hour=0,
+                                                      minute=0,
+                                                      second=0,
+                                                      microsecond=0)
+                last_day_last_month = first_day_current_month - timedelta(
+                    days=1)
+                first_day_last_month = last_day_last_month.replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0)
+
+                date_filter_start = pd.to_datetime(first_day_last_month,
+                                                   utc=True)
+                date_filter_end = pd.to_datetime(last_day_last_month.replace(
+                    hour=23, minute=59, second=59),
+                                                 utc=True)
+                logger.info(
+                    f"Using last month filter: {date_filter_start} to {date_filter_end}"
+                )
 
             elif filter_type == 'current_week':
                 days_since_monday = now.weekday()
                 monday_this_week = now - timedelta(days=days_since_monday)
-                monday_this_week = monday_this_week.replace(hour=0, minute=0, second=0, microsecond=0)
+                monday_this_week = monday_this_week.replace(hour=0,
+                                                            minute=0,
+                                                            second=0,
+                                                            microsecond=0)
 
                 date_filter_start = pd.to_datetime(monday_this_week, utc=True)
                 date_filter_end = pd.to_datetime(now, utc=True)
-                logger.info(f"Using current week filter: {date_filter_start} to {date_filter_end}")
+                logger.info(
+                    f"Using current week filter: {date_filter_start} to {date_filter_end}"
+                )
 
             else:
                 logger.info(f"Unknown or no filter type set, using all data")
@@ -1116,29 +1179,39 @@ class SupabaseClient:
             # Apply date filter to leads and activities if applicable
             if date_filter_start and date_filter_end:
                 if not leads.empty and 'criado_em' in leads.columns:
-                    leads['criado_em'] = pd.to_datetime(leads['criado_em'], errors='coerce', utc=True)
-                    leads = leads[
-                        (leads['criado_em'] >= date_filter_start) &
-                        (leads['criado_em'] <= date_filter_end)
-                    ]
-                    logger.info(f"Filtered leads to {len(leads)} records within date range")
+                    leads['criado_em'] = pd.to_datetime(leads['criado_em'],
+                                                        errors='coerce',
+                                                        utc=True)
+                    leads = leads[(leads['criado_em'] >= date_filter_start)
+                                  & (leads['criado_em'] <= date_filter_end)]
+                    logger.info(
+                        f"Filtered leads to {len(leads)} records within date range"
+                    )
 
                 if not activities.empty and 'criado_em' in activities.columns:
-                    activities['criado_em'] = pd.to_datetime(activities['criado_em'], errors='coerce', utc=True)
+                    activities['criado_em'] = pd.to_datetime(
+                        activities['criado_em'], errors='coerce', utc=True)
                     activities = activities[
-                        (activities['criado_em'] >= date_filter_start) &
-                        (activities['criado_em'] <= date_filter_end)
-                    ]
-                    logger.info(f"Filtered activities to {len(activities)} records within date range")
+                        (activities['criado_em'] >= date_filter_start)
+                        & (activities['criado_em'] <= date_filter_end)]
+                    logger.info(
+                        f"Filtered activities to {len(activities)} records within date range"
+                    )
 
             # Load current rules for this company
             rules = self.load_rules(company_id)
             if not rules:
-                logger.warning(f"No rules found for point calculation for company {company_id}")
+                logger.warning(
+                    f"No rules found for point calculation for company {company_id}"
+                )
                 return
 
-            existing_points = self.client.table("broker_points").select("*").eq("company_id", company_id).execute()
-            points_dict = {point['id']: point for point in existing_points.data}
+            existing_points = self.client.table("broker_points").select(
+                "*").eq("company_id", company_id).execute()
+            points_dict = {
+                point['id']: point
+                for point in existing_points.data
+            }
 
             for _, broker in brokers.iterrows():
                 broker_id = broker['id']
@@ -1146,29 +1219,41 @@ class SupabaseClient:
                 total_points = 0
                 rule_results = {}
 
-                broker_leads = leads[leads['responsavel_id'] == broker_id] if not leads.empty else pd.DataFrame()
-                broker_activities = activities[activities['user_id'] == broker_id] if not activities.empty else pd.DataFrame()
+                broker_leads = leads[
+                    leads['responsavel_id'] ==
+                    broker_id] if not leads.empty else pd.DataFrame()
+                broker_activities = activities[
+                    activities['user_id'] ==
+                    broker_id] if not activities.empty else pd.DataFrame()
 
-                logger.info(f"Calculating points for broker {broker_name} (ID: {broker_id})")
+                logger.info(
+                    f"Calculating points for broker {broker_name} (ID: {broker_id})"
+                )
                 logger.info(f"  - {len(broker_leads)} leads")
                 logger.info(f"  - {len(broker_activities)} activities")
 
                 for rule_name, rule_config in rules.items():
                     try:
                         count = self._calculate_rule_points(
-                            rule_name, rule_config, broker_leads, broker_activities, leads, activities, company_id
-                        )
+                            rule_name, rule_config, broker_leads,
+                            broker_activities, leads, activities, company_id)
                         rule_results[rule_name] = count
 
-                        points_per_occurrence = rule_config.get('pontos', 0) if isinstance(rule_config, dict) else rule_config
+                        points_per_occurrence = rule_config.get(
+                            'pontos', 0) if isinstance(rule_config,
+                                                       dict) else rule_config
                         rule_points = count * points_per_occurrence
                         total_points += rule_points
 
                         if count > 0:
-                            logger.info(f"  - {rule_name}: {count} occurrences × {points_per_occurrence} = {rule_points} points")
+                            logger.info(
+                                f"  - {rule_name}: {count} occurrences × {points_per_occurrence} = {rule_points} points"
+                            )
 
                     except Exception as e:
-                        logger.error(f"Error calculating rule {rule_name} for broker {broker_id}: {str(e)}")
+                        logger.error(
+                            f"Error calculating rule {rule_name} for broker {broker_id}: {str(e)}"
+                        )
                         rule_results[rule_name] = 0
 
                 current_time = datetime.now().isoformat()
@@ -1180,15 +1265,18 @@ class SupabaseClient:
                     'updated_at': current_time
                 }
 
-                schema_fields = ['leads_visitados', 'propostas_enviadas', 'vendas_realizadas', 'leads_perdidos', 'leads_descartados']
+                schema_fields = [
+                    'leads_visitados', 'propostas_enviadas',
+                    'vendas_realizadas', 'leads_perdidos', 'leads_descartados'
+                ]
                 for rule_name, count in rule_results.items():
                     if rule_name in schema_fields:
                         broker_points_data[rule_name] = count
 
                 try:
-                    existing_check = self.client.table("broker_points").select("*").eq(
-                        "id", broker_id
-                    ).eq("company_id", company_id).execute()
+                    existing_check = self.client.table("broker_points").select(
+                        "*").eq("id", broker_id).eq("company_id",
+                                                    company_id).execute()
 
                     if existing_check.data:
                         existing_data = existing_check.data[0]
@@ -1198,6 +1286,62 @@ class SupabaseClient:
                             if key in ['id', 'company_id']:
                                 continue
 
+                            existing_value = existing_data.get(key)
+                            if existing_value != new_value:
+                                if isinstance(existing_value,
+                                              (int, float)) and isinstance(
+                                                  new_value, (int, float)):
+                                    if existing_value != new_value:
+                                        update_data[key] = new_value
+                                else:
+                                    update_data[key] = new_value
+
+                        if update_data:
+                            result = self.client.table("broker_points").update(
+                                update_data).eq("id", broker_id).eq(
+                                    "company_id", company_id).execute()
+
+                            if hasattr(result, "error") and result.error:
+                                logger.error(
+                                    f"Update error for broker {broker_id}: {result.error}"
+                                )
+                                continue
+
+                            logger.info(
+                                f"Updated {len(update_data)} fields for {broker_name}: {total_points} total points"
+                            )
+                        else:
+                            logger.info(
+                                f"No changes detected for {broker_name} - skipping update"
+                            )
+                    else:
+                        result = self.client.table("broker_points").insert(
+                            broker_points_data).execute()
+
+                        if hasattr(result, "error") and result.error:
+                            logger.error(
+                                f"Insert error for broker {broker_id}: {result.error}"
+                            )
+                            continue
+
+                        logger.info(
+                            f"Inserted new record for {broker_name}: {total_points} total points"
+                        )
+
+                except Exception as db_error:
+                    logger.error(
+                        f"Database error for broker {broker_id}: {str(db_error)}"
+                    )
+                    continue
+
+            logger.info("Broker points calculation completed successfully")
+
+            # Calculate dynamic metrics after broker points
+            self.calculate_dynamic_metrics(company_id)
+
+        except Exception as e:
+            logger.error(f"Error updating broker points: {str(e)}")
+            return
 
     def generate_sla_report(self, company_id, start_date=None, end_date=None):
         """
@@ -1213,102 +1357,123 @@ class SupabaseClient:
         """
         try:
             logger.info(f"Gerando relatório SLA para empresa {company_id}")
-            
+
             # Buscar todos os corretores
-            brokers_result = self.client.table("brokers").select("id, nome").eq(
-                "company_id", company_id
-            ).eq("cargo", "Corretor").execute()
-            
+            brokers_result = self.client.table("brokers").select(
+                "id, nome").eq("company_id",
+                               company_id).eq("cargo", "Corretor").execute()
+
             if not brokers_result.data:
-                logger.warning(f"Nenhum corretor encontrado para empresa {company_id}")
+                logger.warning(
+                    f"Nenhum corretor encontrado para empresa {company_id}")
                 return {}
-            
+
             # Buscar todas as atividades relevantes
-            activities_query = self.client.table("activities").select("*").eq("company_id", company_id)
-            
+            activities_query = self.client.table("activities").select("*").eq(
+                "company_id", company_id)
+
             if start_date:
-                activities_query = activities_query.gte("criado_em", start_date.isoformat())
+                activities_query = activities_query.gte(
+                    "criado_em", start_date.isoformat())
             if end_date:
-                activities_query = activities_query.lte("criado_em", end_date.isoformat())
-            
+                activities_query = activities_query.lte(
+                    "criado_em", end_date.isoformat())
+
             activities_result = activities_query.execute()
-            
+
             if not activities_result.data:
                 logger.warning("Nenhuma atividade encontrada para o período")
                 return {}
-            
+
             all_activities = pd.DataFrame(activities_result.data)
-            
+
             # Gerar relatório por corretor
             sla_report = {}
-            
+
             for broker in brokers_result.data:
                 broker_id = broker['id']
                 broker_name = broker['nome']
-                
-                logger.info(f"Calculando SLA para {broker_name} (ID: {broker_id})")
-                
+
+                logger.info(
+                    f"Calculando SLA para {broker_name} (ID: {broker_id})")
+
                 perdas_inatividade = self._calculate_leads_perdidos_por_inatividade(
-                    broker_id, all_activities, company_id
-                )
-                
+                    broker_id, all_activities, company_id)
+
                 sla_report[broker_id] = {
-                    'nome': broker_name,
-                    'leads_perdidos_inatividade': perdas_inatividade,
-                    'sla_status': 'CRÍTICO' if perdas_inatividade > 5 else 'ATENÇÃO' if perdas_inatividade > 2 else 'OK'
+                    'nome':
+                    broker_name,
+                    'leads_perdidos_inatividade':
+                    perdas_inatividade,
+                    'sla_status':
+                    'CRÍTICO' if perdas_inatividade > 5 else
+                    'ATENÇÃO' if perdas_inatividade > 2 else 'OK'
                 }
-            
-            logger.info(f"Relatório SLA gerado para {len(sla_report)} corretores")
+
+            logger.info(
+                f"Relatório SLA gerado para {len(sla_report)} corretores")
             return sla_report
-            
+
         except Exception as e:
             logger.error(f"Erro ao gerar relatório SLA: {e}")
             return {}
-    
+
     def save_sla_metrics(self, company_id):
         """
         Salva métricas de SLA em uma tabela específica para monitoramento.
         """
         try:
             logger.info(f"Salvando métricas SLA para empresa {company_id}")
-            
+
             sla_report = self.generate_sla_report(company_id)
-            
+
             if not sla_report:
                 logger.warning("Nenhuma métrica SLA para salvar")
                 return
-            
+
             # Preparar dados para inserção
             sla_metrics = []
             current_time = datetime.now().isoformat()
-            
+
             for broker_id, metrics in sla_report.items():
                 sla_metrics.append({
-                    'company_id': company_id,
-                    'broker_id': broker_id,
-                    'broker_name': metrics['nome'],
-                    'leads_perdidos_inatividade': metrics['leads_perdidos_inatividade'],
-                    'sla_status': metrics['sla_status'],
-                    'calculated_at': current_time,
-                    'period_start': datetime.now().replace(day=1).isoformat(),  # Início do mês
-                    'period_end': current_time
+                    'company_id':
+                    company_id,
+                    'broker_id':
+                    broker_id,
+                    'broker_name':
+                    metrics['nome'],
+                    'leads_perdidos_inatividade':
+                    metrics['leads_perdidos_inatividade'],
+                    'sla_status':
+                    metrics['sla_status'],
+                    'calculated_at':
+                    current_time,
+                    'period_start':
+                    datetime.now().replace(day=1).isoformat(),  # Início do mês
+                    'period_end':
+                    current_time
                 })
-            
+
             # Salvar na tabela sla_metrics (criar se não existir)
             try:
                 result = self.client.table("sla_metrics").upsert(
-                    sla_metrics, 
-                    on_conflict='company_id,broker_id,calculated_at'
-                ).execute()
-                
+                    sla_metrics,
+                    on_conflict='company_id,broker_id,calculated_at').execute(
+                    )
+
                 if hasattr(result, "error") and result.error:
-                    logger.error(f"Erro ao salvar métricas SLA: {result.error}")
+                    logger.error(
+                        f"Erro ao salvar métricas SLA: {result.error}")
                 else:
-                    logger.info(f"Métricas SLA salvas: {len(sla_metrics)} registros")
-                    
+                    logger.info(
+                        f"Métricas SLA salvas: {len(sla_metrics)} registros")
+
             except Exception as table_error:
-                logger.warning(f"Tabela sla_metrics pode não existir: {table_error}")
-                logger.info("Para criar a tabela sla_metrics, execute no Supabase:")
+                logger.warning(
+                    f"Tabela sla_metrics pode não existir: {table_error}")
+                logger.info(
+                    "Para criar a tabela sla_metrics, execute no Supabase:")
                 logger.info("""
                 CREATE TABLE sla_metrics (
                     id SERIAL PRIMARY KEY,
@@ -1324,50 +1489,11 @@ class SupabaseClient:
                     UNIQUE(company_id, broker_id, calculated_at)
                 );
                 """)
-            
+
+            return sla_metrics
         except Exception as e:
             logger.error(f"Erro ao salvar métricas SLA: {e}")
 
-
-
-                            existing_value = existing_data.get(key)
-                            if existing_value != new_value:
-                                if isinstance(existing_value, (int, float)) and isinstance(new_value, (int, float)):
-                                    if existing_value != new_value:
-                                        update_data[key] = new_value
-                                else:
-                                    update_data[key] = new_value
-
-                        if update_data:
-                            result = self.client.table("broker_points").update(update_data).eq(
-                                "id", broker_id
-                            ).eq("company_id", company_id).execute()
-
-                            if hasattr(result, "error") and result.error:
-                                logger.error(f"Update error for broker {broker_id}: {result.error}")
-                                continue
-
-                            logger.info(f"Updated {len(update_data)} fields for {broker_name}: {total_points} total points")
-                        else:
-                            logger.info(f"No changes detected for {broker_name} - skipping update")
-                    else:
-                        result = self.client.table("broker_points").insert(broker_points_data).execute()
-
-                        if hasattr(result, "error") and result.error:
-                            logger.error(f"Insert error for broker {broker_id}: {result.error}")
-                            continue
-
-                        logger.info(f"Inserted new record for {broker_name}: {total_points} total points")
-
-                except Exception as db_error:
-                    logger.error(f"Database error for broker {broker_id}: {str(db_error)}")
-                    continue
-
-            logger.info("Broker points calculation completed successfully")
-            
-            # Calculate dynamic metrics after broker points
-            self.calculate_dynamic_metrics(company_id)
-            
             # Generate and save SLA metrics
             try:
                 self.save_sla_metrics(company_id)
@@ -1375,10 +1501,6 @@ class SupabaseClient:
             except Exception as sla_error:
                 logger.error(f"Error generating SLA metrics: {sla_error}")
                 # Don't fail the entire process if SLA metrics fail
-
-        except Exception as e:
-            logger.error(f"Error updating broker points: {str(e)}")
-            return
 
     def setup_company_rules(self, company_id, default_rules=None):
         """
@@ -1473,120 +1595,153 @@ class SupabaseClient:
         Calcula as métricas dinâmicas da empresa e salva na tabela metric_results
         """
         try:
-            logger.info(f"Starting dynamic metrics calculation for company {company_id}")
-            
+            logger.info(
+                f"Starting dynamic metrics calculation for company {company_id}"
+            )
+
             # Buscar métricas dinâmicas da empresa
-            dynamic_metrics_result = self.client.table("dynamic_metrics").select("*").eq(
-                "company_id", company_id
-            ).execute()
-            
+            dynamic_metrics_result = self.client.table(
+                "dynamic_metrics").select("*").eq("company_id",
+                                                  company_id).execute()
+
             if not dynamic_metrics_result.data:
-                logger.info(f"No dynamic metrics found for company {company_id}")
+                logger.info(
+                    f"No dynamic metrics found for company {company_id}")
                 return
-                
+
             dynamic_metrics = dynamic_metrics_result.data
-            logger.info(f"Found {len(dynamic_metrics)} dynamic metrics for company {company_id}")
-            
+            logger.info(
+                f"Found {len(dynamic_metrics)} dynamic metrics for company {company_id}"
+            )
+
             # Buscar todos os leads da empresa para cálculo
             leads_result = self.client.table("leads").select("*").eq(
-                "company_id", company_id
-            ).execute()
-            
+                "company_id", company_id).execute()
+
             if not leads_result.data:
                 logger.warning(f"No leads found for company {company_id}")
                 return
-                
+
             all_leads = pd.DataFrame(leads_result.data)
-            
+
             # Apply date filter if configured
             date_filter_start = None
             date_filter_end = None
-            
+
             try:
-                filter_result = self.client.table("component_filters").select("*").eq(
-                    "component_name", "ranking_metrics"
-                ).eq("company_id", company_id).execute()
-                
+                filter_result = self.client.table("component_filters").select(
+                    "*").eq("component_name",
+                            "ranking_metrics").eq("company_id",
+                                                  company_id).execute()
+
                 if filter_result.data:
                     filter_data = filter_result.data[0]
                     filter_type = filter_data.get('filter_type')
-                    
+
                     from datetime import datetime, timedelta
                     import pytz
-                    
+
                     sao_paulo_tz = pytz.timezone('America/Sao_Paulo')
                     now = datetime.now(sao_paulo_tz)
-                    
+
                     if filter_type == 'custom_range':
                         start_date = filter_data.get('start_date')
                         end_date = filter_data.get('end_date')
-                        
+
                         if start_date and end_date:
-                            date_filter_start = pd.to_datetime(start_date, utc=True)
-                            date_filter_end = pd.to_datetime(end_date, utc=True)
-                            
+                            date_filter_start = pd.to_datetime(start_date,
+                                                               utc=True)
+                            date_filter_end = pd.to_datetime(end_date,
+                                                             utc=True)
+
                     elif filter_type == 'current_month':
-                        first_day_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                        date_filter_start = pd.to_datetime(first_day_of_month, utc=True)
+                        first_day_of_month = now.replace(day=1,
+                                                         hour=0,
+                                                         minute=0,
+                                                         second=0,
+                                                         microsecond=0)
+                        date_filter_start = pd.to_datetime(first_day_of_month,
+                                                           utc=True)
                         date_filter_end = pd.to_datetime(now, utc=True)
-                        
+
                     elif filter_type == 'last_month':
-                        first_day_current_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                        last_day_last_month = first_day_current_month - timedelta(days=1)
-                        first_day_last_month = last_day_last_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                        
-                        date_filter_start = pd.to_datetime(first_day_last_month, utc=True)
-                        date_filter_end = pd.to_datetime(last_day_last_month.replace(hour=23, minute=59, second=59), utc=True)
-                        
+                        first_day_current_month = now.replace(day=1,
+                                                              hour=0,
+                                                              minute=0,
+                                                              second=0,
+                                                              microsecond=0)
+                        last_day_last_month = first_day_current_month - timedelta(
+                            days=1)
+                        first_day_last_month = last_day_last_month.replace(
+                            day=1, hour=0, minute=0, second=0, microsecond=0)
+
+                        date_filter_start = pd.to_datetime(
+                            first_day_last_month, utc=True)
+                        date_filter_end = pd.to_datetime(
+                            last_day_last_month.replace(hour=23,
+                                                        minute=59,
+                                                        second=59),
+                            utc=True)
+
                     elif filter_type == 'current_week':
                         days_since_monday = now.weekday()
-                        monday_this_week = now - timedelta(days=days_since_monday)
-                        monday_this_week = monday_this_week.replace(hour=0, minute=0, second=0, microsecond=0)
-                        
-                        date_filter_start = pd.to_datetime(monday_this_week, utc=True)
+                        monday_this_week = now - timedelta(
+                            days=days_since_monday)
+                        monday_this_week = monday_this_week.replace(
+                            hour=0, minute=0, second=0, microsecond=0)
+
+                        date_filter_start = pd.to_datetime(monday_this_week,
+                                                           utc=True)
                         date_filter_end = pd.to_datetime(now, utc=True)
-                        
+
             except Exception as filter_error:
                 logger.warning(f"Error applying date filter: {filter_error}")
-            
+
             # Apply date filter to leads if configured
             if date_filter_start and date_filter_end:
                 if 'criado_em' in all_leads.columns:
-                    all_leads['criado_em'] = pd.to_datetime(all_leads['criado_em'], errors='coerce', utc=True)
+                    all_leads['criado_em'] = pd.to_datetime(
+                        all_leads['criado_em'], errors='coerce', utc=True)
                     all_leads = all_leads[
-                        (all_leads['criado_em'] >= date_filter_start) &
-                        (all_leads['criado_em'] <= date_filter_end)
-                    ]
-                    logger.info(f"Filtered leads to {len(all_leads)} records within date range")
-            
+                        (all_leads['criado_em'] >= date_filter_start)
+                        & (all_leads['criado_em'] <= date_filter_end)]
+                    logger.info(
+                        f"Filtered leads to {len(all_leads)} records within date range"
+                    )
+
             # Calcular cada métrica dinâmica
             for metric in dynamic_metrics:
                 try:
                     metric_id = metric['id']
                     pipeline_stage_id = metric['pipeline_stage_id']
                     valor_minimo = metric['valor_minimo']
-                    
-                    logger.info(f"Calculating metric {metric_id}: stage {pipeline_stage_id}, minimum {valor_minimo}")
-                    
+
+                    logger.info(
+                        f"Calculating metric {metric_id}: stage {pipeline_stage_id}, minimum {valor_minimo}"
+                    )
+
                     # Contar leads que atingiram a etapa especificada
                     leads_count = 0
                     if not all_leads.empty and 'status_id' in all_leads.columns:
-                        leads_that_reached_stage = all_leads[all_leads['status_id'] == pipeline_stage_id]
+                        leads_that_reached_stage = all_leads[
+                            all_leads['status_id'] == pipeline_stage_id]
                         leads_count = len(leads_that_reached_stage)
-                    
+
                     # Verificar se atingiu o valor mínimo
                     atingiu_meta = leads_count >= valor_minimo
-                    
-                    logger.info(f"Metric {metric_id}: {leads_count} leads reached stage {pipeline_stage_id}, target: {valor_minimo}, achieved: {atingiu_meta}")
-                    
+
+                    logger.info(
+                        f"Metric {metric_id}: {leads_count} leads reached stage {pipeline_stage_id}, target: {valor_minimo}, achieved: {atingiu_meta}"
+                    )
+
                     # Preparar dados para salvar
                     current_time = datetime.now().isoformat()
-                    
+
                     # Usar periodo_referencia se disponível na tabela de filtros
                     periodo_referencia = "periodo_atual"
                     if date_filter_start and date_filter_end:
                         periodo_referencia = f"{date_filter_start.strftime('%Y-%m-%d')} a {date_filter_end.strftime('%Y-%m-%d')}"
-                    
+
                     metric_result_data = {
                         'dynamic_metric_id': metric_id,
                         'company_id': company_id,
@@ -1599,12 +1754,13 @@ class SupabaseClient:
                         'created_at': current_time,
                         'updated_at': current_time
                     }
-                    
+
                     # Verificar se já existe resultado para esta métrica
-                    existing_result = self.client.table("metric_results").select("*").eq(
-                        "dynamic_metric_id", metric_id
-                    ).eq("company_id", company_id).execute()
-                    
+                    existing_result = self.client.table(
+                        "metric_results").select("*").eq(
+                            "dynamic_metric_id",
+                            metric_id).eq("company_id", company_id).execute()
+
                     if existing_result.data:
                         # Atualizar resultado existente
                         existing_id = existing_result.data[0]['id']
@@ -1615,32 +1771,46 @@ class SupabaseClient:
                             'calculado_em': current_time,
                             'updated_at': current_time
                         }
-                        
-                        result = self.client.table("metric_results").update(update_data).eq(
-                            "id", existing_id
-                        ).execute()
-                        
+
+                        result = self.client.table("metric_results").update(
+                            update_data).eq("id", existing_id).execute()
+
                         if hasattr(result, "error") and result.error:
-                            logger.error(f"Error updating metric result {existing_id}: {result.error}")
+                            logger.error(
+                                f"Error updating metric result {existing_id}: {result.error}"
+                            )
                         else:
-                            logger.info(f"Updated metric result for metric {metric_id}")
+                            logger.info(
+                                f"Updated metric result for metric {metric_id}"
+                            )
                     else:
                         # Inserir novo resultado
-                        result = self.client.table("metric_results").insert(metric_result_data).execute()
-                        
+                        result = self.client.table("metric_results").insert(
+                            metric_result_data).execute()
+
                         if hasattr(result, "error") and result.error:
-                            logger.error(f"Error inserting metric result for metric {metric_id}: {result.error}")
+                            logger.error(
+                                f"Error inserting metric result for metric {metric_id}: {result.error}"
+                            )
                         else:
-                            logger.info(f"Inserted new metric result for metric {metric_id}")
-                            
+                            logger.info(
+                                f"Inserted new metric result for metric {metric_id}"
+                            )
+
                 except Exception as metric_error:
-                    logger.error(f"Error calculating metric {metric.get('id', 'unknown')}: {str(metric_error)}")
+                    logger.error(
+                        f"Error calculating metric {metric.get('id', 'unknown')}: {str(metric_error)}"
+                    )
                     continue
-                    
-            logger.info(f"Dynamic metrics calculation completed for company {company_id}")
-            
+
+            logger.info(
+                f"Dynamic metrics calculation completed for company {company_id}"
+            )
+
         except Exception as e:
-            logger.error(f"Error calculating dynamic metrics for company {company_id}: {str(e)}")
+            logger.error(
+                f"Error calculating dynamic metrics for company {company_id}: {str(e)}"
+            )
 
     def _calculate_rule_points(self, rule_name, rule_config, broker_leads,
                                broker_activities, all_leads, all_activities,
@@ -1793,26 +1963,33 @@ class SupabaseClient:
 
             elif rule_name == "leads_perdidos":
                 # Nova lógica: leads perdidos por inatividade (27 minutos sem resposta)
-                logger.debug(f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para broker {rule_name}")
-                logger.debug(f"Broker activities shape: {broker_activities.shape if not broker_activities.empty else 'Empty'}")
-                logger.debug(f"All activities shape: {all_activities.shape if not all_activities.empty else 'Empty'}")
-                
+                logger.debug(
+                    f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para broker {rule_name}"
+                )
+                logger.debug(
+                    f"Broker activities shape: {broker_activities.shape if not broker_activities.empty else 'Empty'}"
+                )
+                logger.debug(
+                    f"All activities shape: {all_activities.shape if not all_activities.empty else 'Empty'}"
+                )
+
                 # Extrair broker_id das atividades do corretor
                 current_broker_id = None
                 if not broker_activities.empty and 'user_id' in broker_activities.columns:
                     user_ids = broker_activities['user_id'].dropna().unique()
                     if len(user_ids) > 0:
                         current_broker_id = user_ids[0]
-                        logger.debug(f"Broker ID identificado: {current_broker_id}")
-                
+                        logger.debug(
+                            f"Broker ID identificado: {current_broker_id}")
+
                 if current_broker_id is None:
-                    logger.debug("❌ Nenhum broker ID identificado - retornando 0")
+                    logger.debug(
+                        "❌ Nenhum broker ID identificado - retornando 0")
                     return 0
-                
+
                 result = self._calculate_leads_perdidos_por_inatividade(
-                    current_broker_id, all_activities, company_id
-                )
-                
+                    current_broker_id, all_activities, company_id)
+
                 logger.debug(f"🏁 RESULTADO LEADS_PERDIDOS: {result}")
                 return result
 
@@ -1821,7 +1998,8 @@ class SupabaseClient:
                 if broker_activities.empty:
                     # Se não há atividades, usar fallback dos leads
                     if not broker_leads.empty and 'status' in broker_leads.columns:
-                        discarded_leads = broker_leads[broker_leads['status'] == 'Perdido']
+                        discarded_leads = broker_leads[broker_leads['status']
+                                                       == 'Perdido']
                         return len(discarded_leads)
                     return 0
 
@@ -1832,7 +2010,8 @@ class SupabaseClient:
                     )
                     # Usar fallback dos leads
                     if not broker_leads.empty and 'status' in broker_leads.columns:
-                        discarded_leads = broker_leads[broker_leads['status'] == 'Perdido']
+                        discarded_leads = broker_leads[broker_leads['status']
+                                                       == 'Perdido']
                         return len(discarded_leads)
                     return 0
 
@@ -1855,10 +2034,12 @@ class SupabaseClient:
                     ) if not discarded_activities.empty else 0
                     return unique_discarded
                 except Exception as e:
-                    logger.warning(f"Error in leads_descartados calculation: {e}")
+                    logger.warning(
+                        f"Error in leads_descartados calculation: {e}")
                     # Fallback para leads com status Perdido
                     if not broker_leads.empty and 'status' in broker_leads.columns:
-                        discarded_leads = broker_leads[broker_leads['status'] == 'Perdido']
+                        discarded_leads = broker_leads[broker_leads['status']
+                                                       == 'Perdido']
                         return len(discarded_leads)
                     return 0
 
@@ -1870,7 +2051,8 @@ class SupabaseClient:
             logger.error(f"Error calculating rule {rule_name}: {str(e)}")
             return 0
 
-    def _calculate_leads_perdidos_por_inatividade(self, broker_id, all_activities, company_id):
+    def _calculate_leads_perdidos_por_inatividade(self, broker_id,
+                                                  all_activities, company_id):
         """
         Calcula leads perdidos por inatividade usando máquina de estados SLA.
         
@@ -1894,22 +2076,27 @@ class SupabaseClient:
                 return 0
 
             # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
-            
+            broker_id = int(broker_id) if isinstance(broker_id,
+                                                     (str,
+                                                      float)) else broker_id
+
             logger.debug(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} ===")
-            
+
             # Buscar etapa "Sem Contato" na tabela stages_list
             sem_contato_stage_id = None
             try:
-                stages_result = self.client.table("stages_list").select("stage_id").eq(
-                    "stage_name", "Sem Contato"
-                ).execute()
-                
+                stages_result = self.client.table("stages_list").select("stage_id") \
+                .ilike("stage_name", "sem contato").execute()
+
                 if stages_result.data:
                     sem_contato_stage_id = stages_result.data[0]['stage_id']
-                    logger.debug(f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}")
+                    logger.debug(
+                        f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}"
+                    )
                 else:
-                    logger.warning("Etapa 'Sem Contato' não encontrada na tabela stages_list")
+                    logger.warning(
+                        "Etapa 'Sem Contato' não encontrada na tabela stages_list"
+                    )
                     return 0
             except Exception as e:
                 logger.error(f"Erro ao buscar etapa 'Sem Contato': {e}")
@@ -1917,64 +2104,73 @@ class SupabaseClient:
 
             # Filtrar atividades relevantes para SLA
             relevant_activities = all_activities[
-                (all_activities['lead_id'].notna()) &
-                (all_activities['criado_em'].notna())
-            ].copy()
-            
+                (all_activities['lead_id'].notna())
+                & (all_activities['criado_em'].notna())].copy()
+
             if relevant_activities.empty:
-                logger.debug(f"Broker {broker_id}: Nenhuma atividade relevante encontrada")
+                logger.debug(
+                    f"Broker {broker_id}: Nenhuma atividade relevante encontrada"
+                )
                 return 0
 
-            logger.debug(f"Total de atividades relevantes: {len(relevant_activities)}")
-            
+            logger.debug(
+                f"Total de atividades relevantes: {len(relevant_activities)}")
+
             # Agrupar atividades por lead_id para processamento
             leads_perdidos_count = 0
             leads_processados = set()
-            
+
             # Buscar todos os leads únicos nas atividades
             unique_leads = relevant_activities['lead_id'].unique()
             logger.debug(f"Leads únicos para processar: {len(unique_leads)}")
-            
+
             for lead_id in unique_leads:
                 if pd.isna(lead_id):
                     continue
-                    
+
                 lead_id = int(lead_id)
                 if lead_id in leads_processados:
                     continue
-                    
+
                 leads_processados.add(lead_id)
-                
+
                 # Filtrar atividades deste lead e ordenar por data
                 lead_activities = relevant_activities[
-                    relevant_activities['lead_id'] == lead_id
-                ].sort_values('criado_em')
-                
+                    relevant_activities['lead_id'] == lead_id].sort_values(
+                        'criado_em')
+
                 if lead_activities.empty:
                     continue
-                
+
                 logger.debug(f"\n--- PROCESSANDO LEAD {lead_id} ---")
                 logger.debug(f"Atividades do lead: {len(lead_activities)}")
-                
+
                 # Máquina de estados para este lead
                 perdas_lead = self._process_lead_sla_state_machine(
-                    lead_id, lead_activities, sem_contato_stage_id, broker_id
-                )
-                
+                    lead_id, lead_activities, sem_contato_stage_id, broker_id)
+
                 if perdas_lead > 0:
                     leads_perdidos_count += perdas_lead
-                    logger.debug(f"Lead {lead_id}: {perdas_lead} perdas por inatividade para broker {broker_id}")
+                    logger.debug(
+                        f"Lead {lead_id}: {perdas_lead} perdas por inatividade para broker {broker_id}"
+                    )
 
-            logger.info(f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)")
+            logger.info(
+                f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)"
+            )
             return leads_perdidos_count
 
         except Exception as e:
-            logger.error(f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}")
+            logger.error(
+                f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}"
+            )
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return 0
-    
-    def _process_lead_sla_state_machine(self, lead_id, lead_activities, sem_contato_stage_id, target_broker_id):
+
+    def _process_lead_sla_state_machine(self, lead_id, lead_activities,
+                                        sem_contato_stage_id,
+                                        target_broker_id):
         """
         Processa a máquina de estados SLA para um lead específico.
         
@@ -1985,119 +2181,149 @@ class SupabaseClient:
         """
         try:
             logger.debug(f"\n    *** MÁQUINA DE ESTADOS - LEAD {lead_id} ***")
-            
+
             perdas_broker = 0
             current_state = "IDLE"
             current_responsible = None
             clock_start_time = None
-            
+
             # Ordenar atividades por timestamp
             activities_sorted = lead_activities.sort_values('criado_em')
-            
+
             logger.debug(f"    Atividades ordenadas: {len(activities_sorted)}")
-            
+
             for idx, (_, activity) in enumerate(activities_sorted.iterrows()):
                 activity_time = activity['criado_em']
                 activity_type = activity.get('tipo', '')
                 user_id = activity.get('user_id')
-                
-                logger.debug(f"    [{idx+1}] {activity_time} | {activity_type} | user: {user_id}")
-                
+
+                logger.debug(
+                    f"    [{idx+1}] {activity_time} | {activity_type} | user: {user_id}"
+                )
+
                 # EVENTO: Mudança de status para "Sem Contato"
-                if (activity_type == 'mudança_status' and 
-                    activity.get('status_novo') == sem_contato_stage_id):
-                    
+                if (activity_type == 'mudança_status' and
+                        activity.get('status_novo') == sem_contato_stage_id):
+
                     logger.debug(f"        → Lead entrou em 'Sem Contato'")
-                    
+
                     # Buscar quem é o responsável atual
                     # Pode estar na mesma atividade ou precisar buscar próxima mudança de responsável
                     responsible_in_status = self._get_responsible_at_time(
-                        lead_activities, activity_time
-                    )
-                    
+                        lead_activities, activity_time)
+
                     if responsible_in_status:
                         current_responsible = responsible_in_status
                         current_state = "COUNTING"
                         clock_start_time = activity_time
-                        logger.debug(f"        → INICIOU RELÓGIO para responsável {current_responsible}")
+                        logger.debug(
+                            f"        → INICIOU RELÓGIO para responsável {current_responsible}"
+                        )
                         logger.debug(f"        → Estado: {current_state}")
-                
+
                 # EVENTO: Mudança de responsável enquanto em "Sem Contato"
-                elif (activity_type == 'mudança_responsável' and 
-                      current_state == "COUNTING"):
-                    
+                elif (activity_type == 'mudança_responsável'
+                      and current_state == "COUNTING"):
+
                     old_responsible = activity.get('responsavel_anterior')
                     new_responsible = activity.get('responsavel_novo')
-                    
-                    logger.debug(f"        → Mudança responsável: {old_responsible} → {new_responsible}")
-                    
+
+                    logger.debug(
+                        f"        → Mudança responsável: {old_responsible} → {new_responsible}"
+                    )
+
                     if old_responsible == current_responsible and clock_start_time:
                         # Verificar se passou tempo suficiente (27 min)
-                        time_diff_minutes = (activity_time - clock_start_time).total_seconds() / 60
-                        logger.debug(f"        → Tempo decorrido: {time_diff_minutes:.1f} min")
-                        
+                        time_diff_minutes = (activity_time - clock_start_time
+                                             ).total_seconds() / 60
+                        logger.debug(
+                            f"        → Tempo decorrido: {time_diff_minutes:.1f} min"
+                        )
+
                         if time_diff_minutes >= 27:
                             # SLA VIOLADO - contar perda se for o broker alvo
                             if old_responsible == target_broker_id:
                                 perdas_broker += 1
-                                logger.debug(f"        → ❌ SLA VIOLADO! Perda contabilizada para broker {target_broker_id}")
+                                logger.debug(
+                                    f"        → ❌ SLA VIOLADO! Perda contabilizada para broker {target_broker_id}"
+                                )
                             else:
-                                logger.debug(f"        → SLA violado, mas não é o broker alvo ({target_broker_id})")
+                                logger.debug(
+                                    f"        → SLA violado, mas não é o broker alvo ({target_broker_id})"
+                                )
                         else:
-                            logger.debug(f"        → Mudança antes de 27 min - não conta como perda")
-                    
+                            logger.debug(
+                                f"        → Mudança antes de 27 min - não conta como perda"
+                            )
+
                     # REINICIAR relógio com novo responsável
                     if new_responsible:
                         current_responsible = new_responsible
                         current_state = "COUNTING"
                         clock_start_time = activity_time
-                        logger.debug(f"        → REINICIOU RELÓGIO para novo responsável {new_responsible}")
-                
+                        logger.debug(
+                            f"        → REINICIOU RELÓGIO para novo responsável {new_responsible}"
+                        )
+
                 # EVENTO: Mensagem enviada pelo responsável atual (SALVA SLA)
-                elif (activity_type == 'mensagem_enviada' and 
-                      current_state == "COUNTING" and
-                      user_id == current_responsible):
-                    
+                elif (activity_type == 'mensagem_enviada'
+                      and current_state == "COUNTING"
+                      and user_id == current_responsible):
+
                     if clock_start_time:
-                        time_diff_minutes = (activity_time - clock_start_time).total_seconds() / 60
-                        logger.debug(f"        → ✅ MENSAGEM ENVIADA pelo responsável {user_id}")
-                        logger.debug(f"        → Tempo até resposta: {time_diff_minutes:.1f} min")
-                        logger.debug(f"        → SLA CUMPRIDO - parando relógio")
-                    
+                        time_diff_minutes = (activity_time - clock_start_time
+                                             ).total_seconds() / 60
+                        logger.debug(
+                            f"        → ✅ MENSAGEM ENVIADA pelo responsável {user_id}"
+                        )
+                        logger.debug(
+                            f"        → Tempo até resposta: {time_diff_minutes:.1f} min"
+                        )
+                        logger.debug(
+                            f"        → SLA CUMPRIDO - parando relógio")
+
                     current_state = "SAVED"
                     clock_start_time = None
-                
+
                 # EVENTO: Mudança de status para fora de "Sem Contato"
-                elif (activity_type == 'mudança_status' and 
-                      activity.get('status_anterior') == sem_contato_stage_id and
-                      activity.get('status_novo') != sem_contato_stage_id):
-                    
+                elif (activity_type == 'mudança_status' and
+                      activity.get('status_anterior') == sem_contato_stage_id
+                      and activity.get('status_novo') != sem_contato_stage_id):
+
                     logger.debug(f"        → Lead saiu de 'Sem Contato'")
-                    logger.debug(f"        → PARANDO todos os relógios - Estado: IDLE")
+                    logger.debug(
+                        f"        → PARANDO todos os relógios - Estado: IDLE")
                     current_state = "IDLE"
                     current_responsible = None
                     clock_start_time = None
-            
+
             # Verificar se ainda está contando no final (sem mudança final)
             if current_state == "COUNTING" and current_responsible == target_broker_id and clock_start_time:
                 from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
                 final_time_diff = (now - clock_start_time).total_seconds() / 60
-                
+
                 if final_time_diff >= 27:
-                    logger.debug(f"        → ⏰ RELÓGIO AINDA ATIVO - {final_time_diff:.1f} min sem resposta")
+                    logger.debug(
+                        f"        → ⏰ RELÓGIO AINDA ATIVO - {final_time_diff:.1f} min sem resposta"
+                    )
                     # Poderia contar como perda, mas depende da regra de negócio
                     # Por ora, só conta perdas quando há troca explícita
                 else:
-                    logger.debug(f"        → Relógio ativo há {final_time_diff:.1f} min - ainda dentro do prazo")
-            
-            logger.debug(f"    *** FIM MÁQUINA DE ESTADOS - PERDAS: {perdas_broker} ***")
+                    logger.debug(
+                        f"        → Relógio ativo há {final_time_diff:.1f} min - ainda dentro do prazo"
+                    )
+
+            logger.debug(
+                f"    *** FIM MÁQUINA DE ESTADOS - PERDAS: {perdas_broker} ***"
+            )
             return perdas_broker
-            
+
         except Exception as e:
-            logger.error(f"Erro na máquina de estados para lead {lead_id}: {e}")
+            logger.error(
+                f"Erro na máquina de estados para lead {lead_id}: {e}")
             return 0
-    
+
     def _get_responsible_at_time(self, lead_activities, target_time):
         """
         Busca quem era o responsável pelo lead em um momento específico.
@@ -2105,16 +2331,17 @@ class SupabaseClient:
         try:
             # Buscar a mudança de responsável mais recente antes ou no momento target_time
             responsible_changes = lead_activities[
-                (lead_activities['tipo'] == 'mudança_responsável') &
-                (lead_activities['criado_em'] <= target_time)
-            ].sort_values('criado_em', ascending=False)
-            
+                (lead_activities['tipo'] == 'mudança_responsável')
+                & (lead_activities['criado_em'] <= target_time)].sort_values(
+                    'criado_em', ascending=False)
+
             if not responsible_changes.empty:
                 latest_change = responsible_changes.iloc[0]
                 return latest_change.get('responsavel_novo')
-            
+
             return None
-            
+
         except Exception as e:
-            logger.error(f"Erro ao buscar responsável no tempo {target_time}: {e}")
+            logger.error(
+                f"Erro ao buscar responsável no tempo {target_time}: {e}")
             return None

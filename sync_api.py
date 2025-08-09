@@ -106,8 +106,13 @@ def continuous_sync_worker(company_id, config):
                 logger.info(f"[{company_id}] Fetching leads...")
                 df_leads, df_stages = kommo_api.get_leads()
 
-                logger.info(f"[{company_id}] Fetching activities incrementally...")
+                logger.info(
+                    f"[{company_id}] Fetching activities incrementally...")
                 activities = kommo_api.get_activities(company_id=company_id)
+
+                logger.info(f"[{company_id}] Saving SLA metrics...")
+                sla_metrics = local_supabase.save_sla_metrics(
+                    company_id=company_id)
 
                 # Add company_id to all DataFrames
                 if brokers is not None and not brokers.empty:
@@ -130,19 +135,28 @@ def continuous_sync_worker(company_id, config):
                 else:
                     activities = pd.DataFrame()  # Explicitly handle as None
 
+                if sla_metrics is not None and not sla_metrics.empty:
+                    sla_metrics['company_id'] = company_id
+                else:
+                    sla_metrics = pd.DataFrame()  # Explicitly handle as None
+
                 # Log data volumes
                 logger.info(
                     f"[{company_id}] Data volumes - Brokers: {len(brokers)}, Leads: {len(df_leads)}, Activities: {len(activities)}, Stages: {len(df_stages)}"
                 )
-                
+
                 # Log sample IDs for debugging
                 if not df_leads.empty:
                     sample_lead_ids = df_leads['id'].head(5).tolist()
-                    logger.info(f"[{company_id}] Sample lead IDs: {sample_lead_ids}")
-                    
+                    logger.info(
+                        f"[{company_id}] Sample lead IDs: {sample_lead_ids}")
+
                 if not activities.empty and 'lead_id' in activities.columns:
-                    valid_activity_lead_ids = activities['lead_id'].dropna().head(5).tolist()
-                    logger.info(f"[{company_id}] Sample activity lead_ids: {valid_activity_lead_ids}")
+                    valid_activity_lead_ids = activities['lead_id'].dropna(
+                    ).head(5).tolist()
+                    logger.info(
+                        f"[{company_id}] Sample activity lead_ids: {valid_activity_lead_ids}"
+                    )
 
                 # Incremental sync with change detection
                 changes_detected = sync_manager.sync_data_incremental(
@@ -241,7 +255,8 @@ def continuous_sync_worker(company_id, config):
                 })
 
                 logger.error(
-                    f"[{company_id}] Sync error (attempt {consecutive_errors}): {e}")
+                    f"[{company_id}] Sync error (attempt {consecutive_errors}): {e}"
+                )
 
                 # Exponential backoff for errors
                 error_delay = min(
