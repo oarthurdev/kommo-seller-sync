@@ -1245,7 +1245,7 @@ class SupabaseClient:
                         rule_points = count * points_per_occurrence
                         total_points += rule_points
 
-                        if count > 0:
+                        if count > 0 or rule_name == 'leads_perdidos':
                             logger.info(
                                 f"  - {rule_name}: {count} occurrences × {points_per_occurrence} = {rule_points} points"
                             )
@@ -1265,13 +1265,20 @@ class SupabaseClient:
                     'updated_at': current_time
                 }
 
-                schema_fields = [
-                    'leads_visitados', 'propostas_enviadas',
-                    'vendas_realizadas', 'leads_perdidos', 'leads_descartados'
-                ]
+                # Mapear resultados das regras para campos específicos do schema
+                schema_field_mapping = {
+                    'leads_visitados': 'leads_visitados',
+                    'propostas_enviadas': 'propostas_enviadas', 
+                    'vendas_realizadas': 'vendas_realizadas',
+                    'leads_perdidos': 'leads_perdidos',  # Mapear leads perdidos por inatividade
+                    'leads_descartados': 'leads_descartados'
+                }
+                
                 for rule_name, count in rule_results.items():
-                    if rule_name in schema_fields:
-                        broker_points_data[rule_name] = count
+                    if rule_name in schema_field_mapping:
+                        field_name = schema_field_mapping[rule_name]
+                        broker_points_data[field_name] = count
+                        logger.debug(f"  - Mapped {rule_name}: {count} → broker_points.{field_name}"))
 
                 try:
                     existing_check = self.client.table("broker_points").select(
@@ -1990,6 +1997,7 @@ class SupabaseClient:
                 result = self._calculate_leads_perdidos_por_inatividade(
                     current_broker_id, all_activities, company_id)
 
+                logger.info(f"🔥 LEADS_PERDIDOS calculado para broker {current_broker_id}: {result}")
                 logger.debug(f"🏁 RESULTADO LEADS_PERDIDOS: {result}")
                 return result
 
