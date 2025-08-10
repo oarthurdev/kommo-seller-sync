@@ -2082,6 +2082,9 @@ class SupabaseClient:
             # Buscar etapa "Sem Contato" na tabela stages_list
             sem_contato_stage_id = None
             try:
+                query_stages = "SELECT stage_id FROM stages_list WHERE stage_name ILIKE 'sem contato'"
+                logger.info(f"[SLA] SQL Query - Buscar etapa 'Sem Contato': {query_stages}")
+                
                 stages_result = self.client.table("stages_list").select("stage_id") \
                 .ilike("stage_name", "sem contato").execute()
 
@@ -2097,6 +2100,9 @@ class SupabaseClient:
 
             # Buscar leads do broker que estão na etapa "Sem Contato"
             try:
+                query_leads = f"SELECT id, criado_em FROM leads WHERE responsavel_id = {broker_id} AND status_id = {sem_contato_stage_id} AND company_id = '{company_id}'"
+                logger.info(f"[SLA] SQL Query - Buscar leads do broker em 'Sem Contato': {query_leads}")
+                
                 leads_sem_contato_result = self.client.table("leads").select("id, criado_em") \
                     .eq("responsavel_id", broker_id) \
                     .eq("status_id", sem_contato_stage_id) \
@@ -2142,6 +2148,9 @@ class SupabaseClient:
 
                 # Verificar se houve mensagem enviada pelo broker neste lead
                 try:
+                    query_activities = f"SELECT * FROM activities WHERE lead_id = {lead_id} AND user_id = {broker_id} AND tipo = 'mensagem_enviada' AND criado_em >= '{criado_em}' AND criado_em <= '{tempo_limite}'"
+                    logger.info(f"[SLA] SQL Query - Verificar mensagens enviadas para lead {lead_id}: {query_activities}")
+                    
                     if not all_activities.empty:
                         # Filtrar atividades de mensagem enviada pelo broker para este lead
                         mensagens_broker = all_activities[
