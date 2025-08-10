@@ -1278,7 +1278,6 @@ class SupabaseClient:
                     if rule_name in schema_field_mapping:
                         field_name = schema_field_mapping[rule_name]
                         broker_points_data[field_name] = count
-                        logger.debug(f"  - Mapped {rule_name}: {count} → broker_points.{field_name}"))
 
                 try:
                     existing_check = self.client.table("broker_points").select(
