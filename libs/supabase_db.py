@@ -1352,6 +1352,7 @@ class SupabaseClient:
                         # Log específico para leads_perdidos para debug
                         if rule_name == 'leads_perdidos':
                             logger.info(f"  - 🔥 SALVANDO leads_perdidos: {count} para broker {broker_name}")
+                            logger.info(f"  - 📋 Valor {count} será salvo na coluna leads_perdidos da tabela broker_points")
 
                 # Debug final: mostrar todos os dados que serão salvos
                 logger.info(f"📊 broker_points_data FINAL para {broker_name}: {broker_points_data}")
@@ -1577,13 +1578,8 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Erro ao salvar métricas SLA: {e}")
 
-            # Generate and save SLA metrics
-            try:
-                self.save_sla_metrics(company_id)
-                logger.info("SLA metrics generated and saved successfully")
-            except Exception as sla_error:
-                logger.error(f"Error generating SLA metrics: {sla_error}")
-                # Don't fail the entire process if SLA metrics fail
+            # Note: SLA metrics are now integrated into broker_points calculation
+            logger.info("SLA metrics integrated into broker points calculation")
 
     def setup_company_rules(self, company_id, default_rules=None):
         """
@@ -2075,6 +2071,30 @@ class SupabaseClient:
 
                 logger.info(f"🔥 LEADS_PERDIDOS calculado para broker {current_broker_id}: {result}")
                 logger.debug(f"🏁 RESULTADO LEADS_PERDIDOS: {result}")
+                
+                # Salvar também na tabela sla_metrics para histórico
+                try:
+                    current_time = datetime.now().isoformat()
+                    sla_metric_data = {
+                        'company_id': company_id,
+                        'broker_id': current_broker_id,
+                        'broker_name': 'Unknown',  # Nome será preenchido depois se necessário
+                        'leads_perdidos_inatividade': result,
+                        'sla_status': 'CRÍTICO' if result > 5 else 'ATENÇÃO' if result > 2 else 'OK',
+                        'calculated_at': current_time,
+                        'period_start': datetime.now().replace(day=1).isoformat(),
+                        'period_end': current_time
+                    }
+                    
+                    # Upsert na tabela sla_metrics
+                    self.client.table("sla_metrics").upsert(
+                        sla_metric_data,
+                        on_conflict='company_id,broker_id,calculated_at'
+                    ).execute()
+                    
+                except Exception as sla_save_error:
+                    logger.warning(f"Erro ao salvar SLA metric: {sla_save_error}")
+                
                 return result
 
             elif rule_name == "leads_descartados":
