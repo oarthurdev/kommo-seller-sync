@@ -2075,24 +2075,27 @@ class SupabaseClient:
                 return 0
 
             # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
+            broker_id = int(broker_id) if isinstance(broker_id,
+                                                     (str,
+                                                      float)) else broker_id
 
             logger.debug(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} ===")
 
             # Buscar etapa "Sem Contato" na tabela stages_list
             sem_contato_stage_id = None
             try:
-                query_stages = "SELECT stage_id FROM stages_list WHERE stage_name ILIKE 'sem contato'"
-                logger.info(f"[SLA] SQL Query - Buscar etapa 'Sem Contato': {query_stages}")
-                
                 stages_result = self.client.table("stages_list").select("stage_id") \
-                .ilike("stage_name", "sem contato").execute()
+                .ilike("stage_name", "sem contato").eq('company_id', company_id).execute()
 
                 if stages_result.data:
                     sem_contato_stage_id = stages_result.data[0]['stage_id']
-                    logger.debug(f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}")
+                    logger.debug(
+                        f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}"
+                    )
                 else:
-                    logger.warning("Etapa 'Sem Contato' não encontrada na tabela stages_list")
+                    logger.warning(
+                        "Etapa 'Sem Contato' não encontrada na tabela stages_list"
+                    )
                     return 0
             except Exception as e:
                 logger.error(f"Erro ao buscar etapa 'Sem Contato': {e}")
@@ -2100,20 +2103,21 @@ class SupabaseClient:
 
             # Buscar leads do broker que estão na etapa "Sem Contato"
             try:
-                query_leads = f"SELECT id, criado_em FROM leads WHERE responsavel_id = {broker_id} AND status_id = {sem_contato_stage_id} AND company_id = '{company_id}'"
-                logger.info(f"[SLA] SQL Query - Buscar leads do broker em 'Sem Contato': {query_leads}")
-                
                 leads_sem_contato_result = self.client.table("leads").select("id, criado_em") \
                     .eq("responsavel_id", broker_id) \
                     .eq("status_id", sem_contato_stage_id) \
                     .eq("company_id", company_id).execute()
 
                 if not leads_sem_contato_result.data:
-                    logger.debug(f"Broker {broker_id}: Nenhum lead na etapa 'Sem Contato'")
+                    logger.debug(
+                        f"Broker {broker_id}: Nenhum lead na etapa 'Sem Contato'"
+                    )
                     return 0
 
                 leads_sem_contato = leads_sem_contato_result.data
-                logger.debug(f"Broker {broker_id}: {len(leads_sem_contato)} leads na etapa 'Sem Contato'")
+                logger.debug(
+                    f"Broker {broker_id}: {len(leads_sem_contato)} leads na etapa 'Sem Contato'"
+                )
 
             except Exception as e:
                 logger.error(f"Erro ao buscar leads em 'Sem Contato': {e}")
@@ -2125,7 +2129,7 @@ class SupabaseClient:
             for lead in leads_sem_contato:
                 lead_id = lead['id']
                 criado_em = lead['criado_em']
-                
+
                 if not criado_em:
                     continue
 
@@ -2134,7 +2138,9 @@ class SupabaseClient:
                     try:
                         criado_em = pd.to_datetime(criado_em, utc=True)
                     except:
-                        logger.warning(f"Não foi possível converter data de criação do lead {lead_id}")
+                        logger.warning(
+                            f"Não foi possível converter data de criação do lead {lead_id}"
+                        )
                         continue
 
                 # Calcular tempo limite (27 minutos após criação)
@@ -2143,42 +2149,50 @@ class SupabaseClient:
 
                 # Se ainda não passou 27 minutos, pular
                 if agora < tempo_limite:
-                    logger.debug(f"Lead {lead_id}: Ainda dentro do prazo de 27 minutos")
+                    logger.debug(
+                        f"Lead {lead_id}: Ainda dentro do prazo de 27 minutos")
                     continue
 
                 # Verificar se houve mensagem enviada pelo broker neste lead
                 try:
-                    query_activities = f"SELECT * FROM activities WHERE lead_id = {lead_id} AND user_id = {broker_id} AND tipo = 'mensagem_enviada' AND criado_em >= '{criado_em}' AND criado_em <= '{tempo_limite}'"
-                    logger.info(f"[SLA] SQL Query - Verificar mensagens enviadas para lead {lead_id}: {query_activities}")
-                    
                     if not all_activities.empty:
                         # Filtrar atividades de mensagem enviada pelo broker para este lead
                         mensagens_broker = all_activities[
-                            (all_activities['lead_id'] == lead_id) &
-                            (all_activities['user_id'] == broker_id) &
-                            (all_activities['tipo'] == 'mensagem_enviada')
-                        ]
+                            (all_activities['lead_id'] == lead_id)
+                            & (all_activities['user_id'] == broker_id) &
+                            (all_activities['tipo'] == 'mensagem_enviada')]
 
                         if mensagens_broker.empty:
                             # Não houve mensagem enviada - conta como perda
                             leads_perdidos_count += 1
-                            logger.debug(f"Lead {lead_id}: SLA VIOLADO - {(agora - criado_em).total_seconds() / 60:.1f} min sem mensagem")
+                            logger.debug(
+                                f"Lead {lead_id}: SLA VIOLADO - {(agora - criado_em).total_seconds() / 60:.1f} min sem mensagem"
+                            )
                         else:
-                            logger.debug(f"Lead {lead_id}: Teve mensagem enviada - SLA OK")
+                            logger.debug(
+                                f"Lead {lead_id}: Teve mensagem enviada - SLA OK"
+                            )
                     else:
                         # Sem atividades, considera como perda
                         leads_perdidos_count += 1
-                        logger.debug(f"Lead {lead_id}: Sem atividades - conta como perda")
+                        logger.debug(
+                            f"Lead {lead_id}: Sem atividades - conta como perda"
+                        )
 
                 except Exception as e:
-                    logger.warning(f"Erro ao verificar mensagens do lead {lead_id}: {e}")
+                    logger.warning(
+                        f"Erro ao verificar mensagens do lead {lead_id}: {e}")
                     continue
 
-            logger.info(f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)")
+            logger.info(
+                f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)"
+            )
             return leads_perdidos_count
 
         except Exception as e:
-            logger.error(f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}")
+            logger.error(
+                f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}"
+            )
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return 0
