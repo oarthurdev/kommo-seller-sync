@@ -2054,13 +2054,12 @@ class SupabaseClient:
     def _calculate_leads_perdidos_por_inatividade(self, broker_id,
                                                   all_activities, company_id):
         """
-        Calcula leads perdidos por inatividade usando máquina de estados SLA.
+        Calcula leads perdidos por inatividade.
         
         Regra:
-        1. Lead entra em etapa "Sem Contato" e tem responsável definido -> INICIA RELÓGIO
-        2. Se troca responsável enquanto em "Sem Contato" -> REINICIA RELÓGIO  
-        3. Se broker envia mensagem -> ZERA RELÓGIO (salvo)
-        4. Se troca responsável após >= 27min sem mensagem -> CONTA PERDA + REINICIA
+        1. Buscar etapa "Sem Contato" na tabela stages_list
+        2. Buscar todos os leads do broker que estão na etapa "Sem Contato"
+        3. Para cada lead, verificar se após 27 minutos da criação não houve mensagem enviada
         
         Args:
             broker_id: ID do corretor
@@ -2071,14 +2070,12 @@ class SupabaseClient:
             int: Número de leads perdidos por inatividade
         """
         try:
-            if broker_id is None or all_activities.empty:
-                logger.debug(f"Broker {broker_id}: No data to process")
+            if broker_id is None:
+                logger.debug(f"Broker ID is None")
                 return 0
 
             # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id,
-                                                     (str,
-                                                      float)) else broker_id
+            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
 
             logger.debug(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} ===")
 
@@ -2090,80 +2087,89 @@ class SupabaseClient:
 
                 if stages_result.data:
                     sem_contato_stage_id = stages_result.data[0]['stage_id']
-                    logger.debug(
-                        f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}"
-                    )
+                    logger.debug(f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}")
                 else:
-                    logger.warning(
-                        "Etapa 'Sem Contato' não encontrada na tabela stages_list"
-                    )
+                    logger.warning("Etapa 'Sem Contato' não encontrada na tabela stages_list")
                     return 0
             except Exception as e:
                 logger.error(f"Erro ao buscar etapa 'Sem Contato': {e}")
                 return 0
 
-            # Filtrar atividades relevantes para SLA
-            relevant_activities = all_activities[
-                (all_activities['lead_id'].notna())
-                & (all_activities['criado_em'].notna())].copy()
+            # Buscar leads do broker que estão na etapa "Sem Contato"
+            try:
+                leads_sem_contato_result = self.client.table("leads").select("id, criado_em") \
+                    .eq("responsavel_id", broker_id) \
+                    .eq("status_id", sem_contato_stage_id) \
+                    .eq("company_id", company_id).execute()
 
-            if relevant_activities.empty:
-                logger.debug(
-                    f"Broker {broker_id}: Nenhuma atividade relevante encontrada"
-                )
+                if not leads_sem_contato_result.data:
+                    logger.debug(f"Broker {broker_id}: Nenhum lead na etapa 'Sem Contato'")
+                    return 0
+
+                leads_sem_contato = leads_sem_contato_result.data
+                logger.debug(f"Broker {broker_id}: {len(leads_sem_contato)} leads na etapa 'Sem Contato'")
+
+            except Exception as e:
+                logger.error(f"Erro ao buscar leads em 'Sem Contato': {e}")
                 return 0
 
-            logger.debug(
-                f"Total de atividades relevantes: {len(relevant_activities)}")
-
-            # Agrupar atividades por lead_id para processamento
             leads_perdidos_count = 0
-            leads_processados = set()
+            from datetime import datetime, timezone, timedelta
 
-            # Buscar todos os leads únicos nas atividades
-            unique_leads = relevant_activities['lead_id'].unique()
-            logger.debug(f"Leads únicos para processar: {len(unique_leads)}")
-
-            for lead_id in unique_leads:
-                if pd.isna(lead_id):
+            for lead in leads_sem_contato:
+                lead_id = lead['id']
+                criado_em = lead['criado_em']
+                
+                if not criado_em:
                     continue
 
-                lead_id = int(lead_id)
-                if lead_id in leads_processados:
+                # Converter criado_em para datetime se necessário
+                if isinstance(criado_em, str):
+                    try:
+                        criado_em = pd.to_datetime(criado_em, utc=True)
+                    except:
+                        logger.warning(f"Não foi possível converter data de criação do lead {lead_id}")
+                        continue
+
+                # Calcular tempo limite (27 minutos após criação)
+                tempo_limite = criado_em + timedelta(minutes=27)
+                agora = datetime.now(timezone.utc)
+
+                # Se ainda não passou 27 minutos, pular
+                if agora < tempo_limite:
+                    logger.debug(f"Lead {lead_id}: Ainda dentro do prazo de 27 minutos")
                     continue
 
-                leads_processados.add(lead_id)
+                # Verificar se houve mensagem enviada pelo broker neste lead
+                try:
+                    if not all_activities.empty:
+                        # Filtrar atividades de mensagem enviada pelo broker para este lead
+                        mensagens_broker = all_activities[
+                            (all_activities['lead_id'] == lead_id) &
+                            (all_activities['user_id'] == broker_id) &
+                            (all_activities['tipo'] == 'mensagem_enviada')
+                        ]
 
-                # Filtrar atividades deste lead e ordenar por data
-                lead_activities = relevant_activities[
-                    relevant_activities['lead_id'] == lead_id].sort_values(
-                        'criado_em')
+                        if mensagens_broker.empty:
+                            # Não houve mensagem enviada - conta como perda
+                            leads_perdidos_count += 1
+                            logger.debug(f"Lead {lead_id}: SLA VIOLADO - {(agora - criado_em).total_seconds() / 60:.1f} min sem mensagem")
+                        else:
+                            logger.debug(f"Lead {lead_id}: Teve mensagem enviada - SLA OK")
+                    else:
+                        # Sem atividades, considera como perda
+                        leads_perdidos_count += 1
+                        logger.debug(f"Lead {lead_id}: Sem atividades - conta como perda")
 
-                if lead_activities.empty:
+                except Exception as e:
+                    logger.warning(f"Erro ao verificar mensagens do lead {lead_id}: {e}")
                     continue
 
-                logger.debug(f"\n--- PROCESSANDO LEAD {lead_id} ---")
-                logger.debug(f"Atividades do lead: {len(lead_activities)}")
-
-                # Máquina de estados para este lead
-                perdas_lead = self._process_lead_sla_state_machine(
-                    lead_id, lead_activities, sem_contato_stage_id, broker_id)
-
-                if perdas_lead > 0:
-                    leads_perdidos_count += perdas_lead
-                    logger.debug(
-                        f"Lead {lead_id}: {perdas_lead} perdas por inatividade para broker {broker_id}"
-                    )
-
-            logger.info(
-                f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)"
-            )
+            logger.info(f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)")
             return leads_perdidos_count
 
         except Exception as e:
-            logger.error(
-                f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}"
-            )
+            logger.error(f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return 0
