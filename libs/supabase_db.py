@@ -427,6 +427,77 @@ class SupabaseClient:
             logger.error(f"Failed to upsert brokers: {str(e)}")
             raise
 
+    def upsert_leads(self, leads_df):
+        """
+        Insert or update lead data in the Supabase database
+
+        Args:
+            leads_df (pandas.DataFrame): DataFrame containing lead data
+        """
+        try:
+            if leads_df.empty:
+                logger.warning("No lead data to insert")
+                return
+
+            logger.info(f"Upserting {len(leads_df)} leads to Supabase")
+
+            # Make a copy of the DataFrame to avoid modifying the original
+            leads_df_clean = leads_df.copy()
+
+            # Replace infinite values with None (null in JSON)
+            numeric_cols = leads_df_clean.select_dtypes(
+                include=['float', 'int']).columns
+            for col in numeric_cols:
+                # Replace NaN and infinite values with None
+                mask = ~np.isfinite(leads_df_clean[col])
+                if mask.any():
+                    leads_df_clean.loc[mask, col] = None
+
+            # Convert bigint columns from float to int to avoid "invalid input syntax for type bigint" errors
+            bigint_columns = ['responsavel_id', 'visitor_lead_id', 'amocrm_id']
+            for col in bigint_columns:
+                if col in leads_df_clean.columns:
+                    # Only convert finite values (NaN/None will be handled separately)
+                    mask = np.isfinite(leads_df_clean[col])
+                    if mask.any():
+                        leads_df_clean.loc[mask,
+                                           col] = leads_df_clean.loc[mask, col].astype(
+                                               'Int64')
+
+            # The 'id' column in leads table is of type TEXT in SQL, but Kommo API might return it as a number
+            # We need to ensure it's converted to string
+            if 'id' in leads_df_clean.columns:
+                leads_df_clean['id'] = leads_df_clean['id'].astype(str)
+
+            # Convert datetime columns to ISO format
+            datetime_columns = [
+                'criado_em', 'atualizado_em', 'data_contato', 'data_criacao_amocrm'
+            ]
+            for col in datetime_columns:
+                if col in leads_df_clean.columns:
+                    # Use errors='coerce' to turn unparseable dates into NaT
+                    leads_df_clean[col] = pd.to_datetime(leads_df_clean[col],
+                                                         errors='coerce')
+                    # Convert NaT to None for database compatibility
+                    leads_df_clean[col] = leads_df_clean[col].apply(
+                        lambda x: x.isoformat() if pd.notnull(x) else None)
+
+            # Upsert data to Supabase - inserir novos e atualizar existentes
+            leads_data = leads_df_clean.to_dict(orient="records")
+
+            result = self.client.table("leads").upsert(
+                leads_data, on_conflict='id').execute()
+
+            if hasattr(result, "error") and result.error:
+                raise Exception(f"Supabase error: {result.error}")
+
+            logger.info(f"Leads upserted successfully: {len(leads_data)} records processed")
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to upsert leads: {str(e)}")
+            raise
+
     def upsert_activities(self, activities_df):
         """
         Insert or update activity data in the Supabase database
@@ -500,8 +571,7 @@ class SupabaseClient:
                     "id").execute()
                 if hasattr(brokers_result, "error") and brokers_result.error:
                     raise Exception(
-                        f"Supabase error querying brokers: {brokers_result.error}"
-                    )
+                        f"Supabase error querying brokers: {brokers_result.error}")
 
                 # Create a set of existing broker IDs for faster lookup
                 existing_broker_ids = set()
@@ -1256,28 +1326,35 @@ class SupabaseClient:
                         )
                         rule_results[rule_name] = 0
 
-                current_time = datetime.now().isoformat()
                 broker_points_data = {
                     'id': broker_id,
                     'company_id': company_id,
                     'pontos': total_points,
                     'nome': broker_name,
-                    'updated_at': current_time
+                    'updated_at': datetime.now().isoformat()
                 }
 
                 # Mapear resultados das regras para campos específicos do schema
                 schema_field_mapping = {
                     'leads_visitados': 'leads_visitados',
-                    'propostas_enviadas': 'propostas_enviadas', 
+                    'propostas_enviadas': 'propostas_enviadas',
                     'vendas_realizadas': 'vendas_realizadas',
-                    'leads_perdidos': 'leads_perdidos',  # Mapear leads perdidos por inatividade
+                    'leads_perdidos': 'leads_perdidos', # Mapear leads perdidos por inatividade
                     'leads_descartados': 'leads_descartados'
                 }
-                
+
                 for rule_name, count in rule_results.items():
                     if rule_name in schema_field_mapping:
                         field_name = schema_field_mapping[rule_name]
                         broker_points_data[field_name] = count
+                        logger.info(f"  - Mapped {rule_name}: {count} → broker_points.{field_name}")
+
+                        # Log específico para leads_perdidos para debug
+                        if rule_name == 'leads_perdidos':
+                            logger.info(f"  - 🔥 SALVANDO leads_perdidos: {count} para broker {broker_name}")
+
+                # Debug final: mostrar todos os dados que serão salvos
+                logger.info(f"📊 broker_points_data FINAL para {broker_name}: {broker_points_data}")
 
                 try:
                     existing_check = self.client.table("broker_points").select(
@@ -1352,12 +1429,12 @@ class SupabaseClient:
     def generate_sla_report(self, company_id, start_date=None, end_date=None):
         """
         Gera relatório detalhado de SLA para todos os corretores.
-        
+
         Args:
             company_id: ID da empresa
             start_date: Data inicial (opcional)
             end_date: Data final (opcional)
-            
+
         Returns:
             dict: Relatório completo de SLA por corretor
         """
@@ -1456,7 +1533,7 @@ class SupabaseClient:
                     'calculated_at':
                     current_time,
                     'period_start':
-                    datetime.now().replace(day=1).isoformat(),  # Início do mês
+                    datetime.now().replace(day=1).isoformat(), # Início do mês
                     'period_end':
                     current_time
                 })
@@ -2062,17 +2139,17 @@ class SupabaseClient:
                                                   all_activities, company_id):
         """
         Calcula leads perdidos por inatividade.
-        
+
         Regra:
         1. Buscar etapa "Sem Contato" na tabela stages_list
         2. Buscar todos os leads do broker que estão na etapa "Sem Contato"
         3. Para cada lead, verificar se após 27 minutos da criação não houve mensagem enviada
-        
+
         Args:
             broker_id: ID do corretor
-            all_activities: DataFrame com todas as atividades 
+            all_activities: DataFrame com todas as atividades
             company_id: ID da empresa
-            
+
         Returns:
             int: Número de leads perdidos por inatividade
         """
@@ -2209,7 +2286,7 @@ class SupabaseClient:
                                         target_broker_id):
         """
         Processa a máquina de estados SLA para um lead específico.
-        
+
         Estados:
         - IDLE: Lead não está em "Sem Contato" ou sem responsável
         - COUNTING: Lead em "Sem Contato" com responsável, contando tempo
