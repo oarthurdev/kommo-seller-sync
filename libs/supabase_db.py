@@ -1315,7 +1315,7 @@ class SupabaseClient:
                         rule_points = count * points_per_occurrence
                         total_points += rule_points
 
-                        if count > 0 or rule_name == 'leads_perdidos':
+                        if count > 0:
                             logger.info(
                                 f"  - {rule_name}: {count} occurrences × {points_per_occurrence} = {rule_points} points"
                             )
@@ -2026,29 +2026,15 @@ class SupabaseClient:
                         return len(sales)
                     return 0
 
-            # Remove legacy rules that don't exist in new schema
-            elif rule_name in [
-                    "leads_atualizados_mesmo_dia", "resposta_rapida_3h",
-                    "todos_leads_respondidos", "cadastro_completo",
-                    "acompanhamento_pos_venda", "leads_sem_interacao_24h",
-                    "leads_ignorados_48h", "leads_respondidos_1h",
-                    "feedbacks_positivos", "leads_respondidos_apos_18h",
-                    "leads_tempo_resposta_acima_12h",
-                    "leads_5_dias_sem_mudanca"
-            ]:
-                logger.info(
-                    f"Skipping legacy rule {rule_name} - not in new schema")
-                return 0
-
             elif rule_name == "leads_perdidos":
                 # Nova lógica: leads perdidos por inatividade (27 minutos sem resposta)
-                logger.debug(
+                logger.info(
                     f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para broker {rule_name}"
                 )
-                logger.debug(
+                logger.info(
                     f"Broker activities shape: {broker_activities.shape if not broker_activities.empty else 'Empty'}"
                 )
-                logger.debug(
+                logger.info(
                     f"All activities shape: {all_activities.shape if not all_activities.empty else 'Empty'}"
                 )
 
@@ -2071,29 +2057,6 @@ class SupabaseClient:
 
                 logger.info(f"🔥 LEADS_PERDIDOS calculado para broker {current_broker_id}: {result}")
                 logger.debug(f"🏁 RESULTADO LEADS_PERDIDOS: {result}")
-                
-                # Salvar também na tabela sla_metrics para histórico
-                try:
-                    current_time = datetime.now().isoformat()
-                    sla_metric_data = {
-                        'company_id': company_id,
-                        'broker_id': current_broker_id,
-                        'broker_name': 'Unknown',  # Nome será preenchido depois se necessário
-                        'leads_perdidos_inatividade': result,
-                        'sla_status': 'CRÍTICO' if result > 5 else 'ATENÇÃO' if result > 2 else 'OK',
-                        'calculated_at': current_time,
-                        'period_start': datetime.now().replace(day=1).isoformat(),
-                        'period_end': current_time
-                    }
-                    
-                    # Upsert na tabela sla_metrics
-                    self.client.table("sla_metrics").upsert(
-                        sla_metric_data,
-                        on_conflict='company_id,broker_id,calculated_at'
-                    ).execute()
-                    
-                except Exception as sla_save_error:
-                    logger.warning(f"Erro ao salvar SLA metric: {sla_save_error}")
                 
                 return result
 
@@ -2147,6 +2110,19 @@ class SupabaseClient:
                         return len(discarded_leads)
                     return 0
 
+            # Remove legacy rules that don't exist in new schema
+            elif rule_name in [
+                    "leads_atualizados_mesmo_dia", "resposta_rapida_3h",
+                    "todos_leads_respondidos", "cadastro_completo",
+                    "acompanhamento_pos_venda", "leads_sem_interacao_24h",
+                    "leads_ignorados_48h", "leads_respondidos_1h",
+                    "feedbacks_positivos", "leads_respondidos_apos_18h",
+                    "leads_tempo_resposta_acima_12h",
+                    "leads_5_dias_sem_mudanca"
+            ]:
+                logger.info(
+                    f"Skipping legacy rule {rule_name} - not in new schema")
+                return 0
             else:
                 logger.warning(f"Unknown rule: {rule_name}")
                 return 0
