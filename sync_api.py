@@ -111,9 +111,9 @@ def continuous_sync_worker(company_id, config):
                 activities = kommo_api.get_activities(company_id=company_id)
 
                 logger.info(f"[{company_id}] Saving SLA metrics...")
-                # Pass the logger to the save_sla_metrics method for detailed logging
+                # Save SLA metrics
                 sla_metrics = local_supabase.save_sla_metrics(
-                    company_id=company_id, logger=logger)
+                    company_id=company_id)
 
                 # Add company_id to all DataFrames
                 if brokers is not None and not brokers.empty:
