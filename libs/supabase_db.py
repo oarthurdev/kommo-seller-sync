@@ -2196,6 +2196,8 @@ class SupabaseClient:
             sem_contato_stage_id = None
             try:
                 logger.debug("🔍 Buscando etapa 'Sem Contato' no banco...")
+                logger.info(f"🔧 SQL QUERY 1 - Buscando etapa 'Sem Contato': SELECT stage_id, stage_name FROM stages_list WHERE company_id = '{company_id}' AND stage_name ILIKE '%sem contato%'")
+                
                 stages_query = self.client.table("stages_list").select("stage_id, stage_name") \
                     .eq("company_id", company_id) \
                     .ilike("stage_name", "%sem contato%")
@@ -2204,10 +2206,12 @@ class SupabaseClient:
                 
                 if not stages_result.data:
                     logger.warning("⚠️ Etapa 'Sem Contato' não encontrada na empresa")
+                    logger.info(f"🔧 RESULTADO SQL QUERY 1: Nenhum resultado encontrado")
                     return 0
                 
                 sem_contato_stage_id = stages_result.data[0]['stage_id']
                 logger.info(f"✅ Etapa 'Sem Contato' encontrada: ID {sem_contato_stage_id}")
+                logger.info(f"🔧 RESULTADO SQL QUERY 1: Encontrados {len(stages_result.data)} registros, usando stage_id = {sem_contato_stage_id}")
 
             except Exception as e:
                 logger.error(f"❌ Erro ao buscar etapa 'Sem Contato': {e}")
@@ -2217,6 +2221,8 @@ class SupabaseClient:
             all_leads_data = []
             try:
                 logger.debug("🔍 Buscando TODOS os leads da empresa no banco...")
+                logger.info(f"🔧 SQL QUERY 2 - Buscando leads: SELECT id, responsavel_id, status_id, criado_em, atualizado_em FROM leads WHERE company_id = '{company_id}'")
+                
                 leads_query = self.client.table("leads").select("id, responsavel_id, status_id, criado_em, atualizado_em") \
                     .eq("company_id", company_id)
                 
@@ -2225,8 +2231,15 @@ class SupabaseClient:
                 if leads_result.data:
                     all_leads_data = leads_result.data
                     logger.info(f"✅ Encontrados {len(all_leads_data)} leads total na empresa")
+                    logger.info(f"🔧 RESULTADO SQL QUERY 2: {len(all_leads_data)} leads retornados")
+                    
+                    # Log de alguns leads para debug
+                    if len(all_leads_data) > 0:
+                        sample_leads = all_leads_data[:3]
+                        logger.debug(f"🔧 AMOSTRA LEADS: {sample_leads}")
                 else:
                     logger.warning("⚠️ Nenhum lead encontrado na empresa")
+                    logger.info(f"🔧 RESULTADO SQL QUERY 2: Nenhum lead encontrado")
                     return 0
 
             except Exception as e:
@@ -2237,6 +2250,8 @@ class SupabaseClient:
             all_activities_data = []
             try:
                 logger.debug("🔍 Buscando TODAS as atividades relevantes da empresa no banco...")
+                logger.info(f"🔧 SQL QUERY 3 - Buscando atividades: SELECT * FROM activities WHERE company_id = '{company_id}' AND tipo IN ('mudança_responsavel', 'mensagem_enviada', 'mudança_status')")
+                
                 activities_query = self.client.table("activities").select("*") \
                     .eq("company_id", company_id) \
                     .in_("tipo", ["mudança_responsavel", "mensagem_enviada", "mudança_status"])
@@ -2246,8 +2261,25 @@ class SupabaseClient:
                 if activities_result.data:
                     all_activities_data = activities_result.data
                     logger.info(f"✅ Encontradas {len(all_activities_data)} atividades relevantes")
+                    logger.info(f"🔧 RESULTADO SQL QUERY 3: {len(all_activities_data)} atividades retornadas")
+                    
+                    # Contar por tipo para debug
+                    tipos_count = {}
+                    for activity in all_activities_data:
+                        tipo = activity.get('tipo', 'desconhecido')
+                        tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
+                    
+                    logger.debug(f"🔧 TIPOS DE ATIVIDADE ENCONTRADAS: {tipos_count}")
+                    
+                    # Log de algumas atividades para debug
+                    if len(all_activities_data) > 0:
+                        sample_activities = all_activities_data[:2]
+                        for i, activity in enumerate(sample_activities):
+                            logger.debug(f"🔧 AMOSTRA ATIVIDADE {i+1}: lead_id={activity.get('lead_id')}, tipo={activity.get('tipo')}, user_id={activity.get('user_id')}")
+                            
                 else:
                     logger.warning("⚠️ Nenhuma atividade relevante encontrada")
+                    logger.info(f"🔧 RESULTADO SQL QUERY 3: Nenhuma atividade encontrada")
                     return 0
 
             except Exception as e:
@@ -2306,6 +2338,9 @@ class SupabaseClient:
             # 6. PROCESSAR TIMELINE DE CADA LEAD INDIVIDUALMENTE
             leads_perdidos_count = 0
             
+            logger.info(f"🔧 INICIANDO ANÁLISE INDIVIDUAL DE {len(unique_lead_ids)} LEADS")
+            logger.info(f"🔧 FILTRO APLICADO: broker_id = {broker_id}, sem_contato_stage_id = {sem_contato_stage_id}")
+            
             for i, lead_id in enumerate(unique_lead_ids):
                 try:
                     logger.debug(f"📋 [{i+1}/{len(unique_lead_ids)}] Processando lead {lead_id}")
@@ -2318,6 +2353,12 @@ class SupabaseClient:
                     if lead_activities.empty:
                         logger.debug(f"   ⚠️ Lead {lead_id}: sem atividades relevantes")
                         continue
+                    
+                    logger.debug(f"   🔧 Lead {lead_id}: {len(lead_activities)} atividades encontradas")
+                    
+                    # Log das atividades deste lead para debug
+                    for idx, (_, activity) in enumerate(lead_activities.head(3).iterrows()):
+                        logger.debug(f"      [{idx+1}] {activity.get('criado_em')} - {activity.get('tipo')} - user:{activity.get('user_id')}")
                     
                     # Processar timeline do lead
                     perdas_lead = self._process_lead_responsibility_timeline(
@@ -2338,6 +2379,12 @@ class SupabaseClient:
                 f"🎯 RESULTADO FINAL - Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade"
             )
             logger.info(f"📊 Análise baseada em {len(all_leads_data)} leads e {len(all_activities_data)} atividades da empresa")
+            logger.info(f"🔧 RESUMO DAS QUERIES EXECUTADAS:")
+            logger.info(f"    QUERY 1: Etapa 'Sem Contato' → stage_id = {sem_contato_stage_id}")
+            logger.info(f"    QUERY 2: Leads da empresa → {len(all_leads_data)} registros")
+            logger.info(f"    QUERY 3: Atividades relevantes → {len(all_activities_data)} registros")
+            logger.info(f"    PROCESSAMENTO: {len(unique_lead_ids)} leads únicos analisados")
+            logger.info(f"    RESULTADO: {leads_perdidos_count} leads perdidos por inatividade")
             
             return leads_perdidos_count
 
