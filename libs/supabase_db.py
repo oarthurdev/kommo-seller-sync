@@ -2187,99 +2187,49 @@ class SupabaseClient:
                 return 0
 
             # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id,
-                                                     (str,
-                                                      float)) else broker_id
+            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
 
             logger.debug(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} ===")
 
-            # Buscar etapa "Sem Contato" na tabela stages_list
-            sem_contato_stage_id = None
+            # Buscar todas as atividades relacionadas ao broker (mudanças de responsável e mensagens)
             try:
-                stages_result = self.client.table("stages_list").select("stage_id") \
-                .ilike("stage_name", "sem contato").eq('company_id', company_id).execute()
+                # Buscar atividades de mudança de responsável onde o broker foi envolvido
+                activities_query = self.client.table("activities").select("*") \
+                    .eq("company_id", company_id) \
+                    .in_("tipo", ["mudança_responsavel", "mensagem_enviada"])
 
-                if stages_result.data:
-                    sem_contato_stage_id = stages_result.data[0]['stage_id']
-                    logger.debug(
-                        f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}"
-                    )
-                else:
-                    logger.warning(
-                        "Etapa 'Sem Contato' não encontrada na tabela stages_list"
-                    )
-                    return 0
-            except Exception as e:
-                logger.error(f"Erro ao buscar etapa 'Sem Contato': {e}")
-                return 0
+                activities_result = activities_query.execute()
 
-            # Buscar todos os leads criados na etapa "Sem Contato"
-            # (não filtrar por responsavel_id pois inicialmente é 0)
-            try:
-                leads_sem_contato_result = self.client.table("leads").select("id, criado_em, responsavel_id") \
-                    .eq("status_id", sem_contato_stage_id) \
-                    .eq("company_id", company_id).execute()
-
-                if not leads_sem_contato_result.data:
-                    logger.debug(
-                        f"Nenhum lead encontrado na etapa 'Sem Contato'"
-                    )
+                if not activities_result.data:
+                    logger.debug("Nenhuma atividade de mudança de responsável ou mensagem encontrada")
                     return 0
 
-                leads_sem_contato = leads_sem_contato_result.data
-                logger.debug(
-                    f"Encontrados {len(leads_sem_contato)} leads na etapa 'Sem Contato'"
-                )
+                activities_df = pd.DataFrame(activities_result.data)
+                
+                # Converter datas
+                if 'criado_em' in activities_df.columns:
+                    activities_df['criado_em'] = pd.to_datetime(
+                        activities_df['criado_em'], errors='coerce', utc=True)
+
+                logger.debug(f"Encontradas {len(activities_df)} atividades de mudança/mensagem")
 
             except Exception as e:
-                logger.error(f"Erro ao buscar leads em 'Sem Contato': {e}")
+                logger.error(f"Erro ao buscar atividades: {e}")
                 return 0
 
-            if all_activities.empty:
-                logger.warning("DataFrame de atividades está vazio")
-                return 0
-
-            # Converter colunas de data para datetime
-            all_activities = all_activities.copy()
-            if 'criado_em' in all_activities.columns:
-                all_activities['criado_em'] = pd.to_datetime(
-                    all_activities['criado_em'], errors='coerce', utc=True)
-
+            # Agrupar por lead_id e processar cada lead
             leads_perdidos_count = 0
-            from datetime import datetime, timezone, timedelta
+            
+            if 'lead_id' not in activities_df.columns:
+                logger.warning("Coluna 'lead_id' não encontrada nas atividades")
+                return 0
 
-            # Processar cada lead individualmente
-            for lead in leads_sem_contato:
-                lead_id = lead['id']
-                criado_em = lead['criado_em']
-
-                if not criado_em:
-                    continue
-
-                # Converter criado_em para datetime
-                if isinstance(criado_em, str):
-                    try:
-                        criado_em = pd.to_datetime(criado_em, utc=True)
-                    except:
-                        logger.warning(
-                            f"Não foi possível converter data de criação do lead {lead_id}"
-                        )
-                        continue
-
-                logger.debug(f"\n--- Processando Lead {lead_id} ---")
-
-                # Buscar todas as atividades deste lead, ordenadas por data
-                lead_activities = all_activities[
-                    all_activities['lead_id'] == lead_id
-                ].sort_values('criado_em').copy()
-
-                if lead_activities.empty:
-                    logger.debug(f"Lead {lead_id}: Sem atividades")
-                    continue
-
-                # Processar o fluxo de responsabilidade deste lead
-                perdas_lead = self._process_lead_responsibility_flow(
-                    lead_id, lead_activities, criado_em, broker_id, sem_contato_stage_id
+            # Processar cada lead com atividades
+            for lead_id in activities_df['lead_id'].dropna().unique():
+                lead_activities = activities_df[activities_df['lead_id'] == lead_id].sort_values('criado_em')
+                
+                perdas_lead = self._process_lead_responsibility_timeline(
+                    lead_id, lead_activities, broker_id
                 )
                 
                 leads_perdidos_count += perdas_lead
@@ -2297,99 +2247,112 @@ class SupabaseClient:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return 0
 
-    def _process_lead_responsibility_flow(self, lead_id, lead_activities, lead_created_at, target_broker_id, sem_contato_stage_id):
+    def _process_lead_responsibility_timeline(self, lead_id, lead_activities, target_broker_id):
         """
-        Processa o fluxo de responsabilidade de um lead específico.
+        Processa a timeline de responsabilidade de um lead específico seguindo o fluxo correto.
+        
+        Fluxo:
+        1. Lead criado com responsavel_id = 0
+        2. Primeiro mudança_responsavel: responsavel_novo assume (responsavel_anterior = 0)
+        3. Se não enviar mensagem em 27min, nova mudança_responsavel
+        4. responsavel_anterior = quem perdeu, responsavel_novo = quem recebeu
+        5. Continua até alguém enviar mensagem
         
         Returns:
-            int: 1 se o target_broker_id perdeu este lead, 0 caso contrário
+            int: quantidade de vezes que o target_broker_id perdeu este lead
         """
         try:
             from datetime import timedelta
             
-            logger.debug(f"  Processando fluxo do lead {lead_id}")
+            logger.debug(f"  🔄 Processando timeline do lead {lead_id}")
             
+            perdas_do_broker = 0
             current_responsible = None
             responsibility_start_time = None
-            perdeu_lead = 0
+            sla_timeout_minutes = 27
             
-            # Processar cada atividade do lead em ordem cronológica
+            # Processar cada atividade em ordem cronológica
             for _, activity in lead_activities.iterrows():
                 activity_time = activity['criado_em']
                 activity_type = activity.get('tipo', '')
-                user_id = activity.get('user_id')
                 
-                logger.debug(f"    {activity_time}: {activity_type} (user: {user_id})")
+                logger.debug(f"    📅 {activity_time}: {activity_type}")
                 
-                # Evento 1: Mudança de responsável (responsavel_novo recebe o lead)
+                # EVENTO: Mudança de responsável
                 if activity_type == 'mudança_responsavel':
                     responsavel_anterior = activity.get('responsavel_anterior')
                     responsavel_novo = activity.get('responsavel_novo')
                     
-                    logger.debug(f"      Mudança: {responsavel_anterior} → {responsavel_novo}")
+                    # Converter para int se necessário
+                    if responsavel_anterior is not None:
+                        try:
+                            responsavel_anterior = int(responsavel_anterior)
+                        except (ValueError, TypeError):
+                            responsavel_anterior = None
                     
-                    # Se havia um responsável anterior, verificar se perdeu por tempo
+                    if responsavel_novo is not None:
+                        try:
+                            responsavel_novo = int(responsavel_novo)
+                        except (ValueError, TypeError):
+                            responsavel_novo = None
+                    
+                    logger.debug(f"      🔄 Mudança: {responsavel_anterior} → {responsavel_novo}")
+                    
+                    # Verificar se o responsável anterior perdeu por inatividade
                     if (current_responsible is not None and 
                         responsibility_start_time is not None and
                         responsavel_anterior == current_responsible):
                         
-                        time_diff = (activity_time - responsibility_start_time).total_seconds() / 60
-                        logger.debug(f"      Tempo de responsabilidade: {time_diff:.1f} min")
+                        time_diff_minutes = (activity_time - responsibility_start_time).total_seconds() / 60
+                        logger.debug(f"      ⏱️  Tempo ativo: {time_diff_minutes:.1f} min")
                         
-                        if time_diff >= 27:
-                            # SLA violado - contar perda se for o broker alvo
+                        # SLA violado (27 minutos sem resposta)
+                        if time_diff_minutes >= sla_timeout_minutes:
                             if current_responsible == target_broker_id:
-                                perdeu_lead = 1
-                                logger.debug(f"      ❌ PERDA! Broker {target_broker_id} perdeu lead {lead_id} após {time_diff:.1f} min")
+                                perdas_do_broker += 1
+                                logger.debug(f"      ❌ PERDA CONFIRMADA! Broker {target_broker_id} perdeu lead {lead_id} após {time_diff_minutes:.1f} min")
                             else:
-                                logger.debug(f"      Perda de outro broker ({current_responsible}), não conta para {target_broker_id}")
+                                logger.debug(f"      ⚠️  Perda de outro broker ({current_responsible})")
+                        else:
+                            logger.debug(f"      ✅ Mudança antes de {sla_timeout_minutes} min - SLA ok")
                     
-                    # Novo responsável assume o lead
+                    # Novo responsável assume
                     if responsavel_novo and responsavel_novo != 0:
-                        current_responsible = int(responsavel_novo)
+                        current_responsible = responsavel_novo
                         responsibility_start_time = activity_time
-                        logger.debug(f"      Novo responsável: {current_responsible} (início: {activity_time})")
+                        logger.debug(f"      👤 Novo responsável: {current_responsible} (início: {activity_time})")
                 
-                # Evento 2: Mensagem enviada pelo responsável atual (salva o SLA)
-                elif (activity_type == 'mensagem_enviada' and 
-                      current_responsible is not None and 
-                      user_id == current_responsible):
+                # EVENTO: Mensagem enviada (SALVA o SLA)
+                elif activity_type == 'mensagem_enviada':
+                    user_id = activity.get('user_id')
                     
-                    if responsibility_start_time:
-                        time_diff = (activity_time - responsibility_start_time).total_seconds() / 60
-                        logger.debug(f"      ✅ MENSAGEM! Responsável {user_id} respondeu em {time_diff:.1f} min")
-                        logger.debug(f"      SLA cumprido - lead não será perdido")
+                    if user_id is not None:
+                        try:
+                            user_id = int(user_id)
+                        except (ValueError, TypeError):
+                            user_id = None
+                    
+                    # Mensagem enviada pelo responsável atual
+                    if (current_responsible is not None and 
+                        user_id == current_responsible and
+                        responsibility_start_time is not None):
                         
-                        # Lead foi salvo, parar o processamento
-                        return perdeu_lead
-                
-                # Evento 3: Mudança de status para fora de "Sem Contato"
-                elif (activity_type == 'mudança_status' and
-                      activity.get('status_anterior') == sem_contato_stage_id and
-                      activity.get('status_novo') != sem_contato_stage_id):
-                    
-                    logger.debug(f"      Lead saiu de 'Sem Contato' - encerrando SLA")
-                    break
+                        time_diff_minutes = (activity_time - responsibility_start_time).total_seconds() / 60
+                        logger.debug(f"      💬 MENSAGEM do responsável {user_id} em {time_diff_minutes:.1f} min")
+                        logger.debug(f"      ✅ SLA CUMPRIDO - lead não será mais perdido")
+                        
+                        # Lead foi salvo, não haverá mais perdas
+                        current_responsible = None
+                        responsibility_start_time = None
+                        break
+                    else:
+                        logger.debug(f"      💬 Mensagem de usuário {user_id} (não é o responsável atual)")
             
-            # Verificar se ainda há responsável ativo no final (sem resolução)
-            if (current_responsible == target_broker_id and 
-                responsibility_start_time is not None):
-                
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc)
-                time_diff = (now - responsibility_start_time).total_seconds() / 60
-                
-                if time_diff >= 27:
-                    logger.debug(f"      ⏰ TIMEOUT! Broker {target_broker_id} ainda responsável há {time_diff:.1f} min")
-                    # Consideramos como perda se passou muito tempo sem ação
-                    # (ajustar conforme regra de negócio)
-                    perdeu_lead = 1
-            
-            logger.debug(f"  Lead {lead_id}: Resultado = {perdeu_lead}")
-            return perdeu_lead
+            logger.debug(f"  📊 Lead {lead_id} - Perdas do broker {target_broker_id}: {perdas_do_broker}")
+            return perdas_do_broker
             
         except Exception as e:
-            logger.error(f"Erro processando fluxo do lead {lead_id}: {e}")
+            logger.error(f"Erro processando timeline do lead {lead_id}: {e}")
             return 0
 
     def _process_lead_sla_state_machine(self, lead_id, lead_activities,
