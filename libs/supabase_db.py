@@ -2074,44 +2074,24 @@ class SupabaseClient:
 
             elif rule_name == "leads_perdidos":
                 # Nova lógica: leads perdidos por inatividade (27 minutos sem resposta)
-                logger.info(
-                    f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para rule_name: {rule_name}"
-                )
-                logger.info(
-                    f"⚠️ AVISO: broker_activities e all_activities são IGNORADOS"
-                )
-                logger.info(
-                    f"⚠️ A função fará suas próprias consultas isoladas no banco"
-                )
-
-                # Usar sempre o broker_id do contexto (mais confiável)
                 current_broker_id = broker_id
 
                 # Fallback apenas se broker_id for None
                 if current_broker_id is None:
                     # Tentar extrair das atividades do broker
                     if not broker_activities.empty and 'user_id' in broker_activities.columns:
-                        user_ids = broker_activities['user_id'].dropna(
-                        ).unique()
+                        user_ids = broker_activities['user_id'].dropna().unique()
                         if len(user_ids) > 0:
                             current_broker_id = user_ids[0]
-                            logger.debug(
-                                f"Broker ID identificado das atividades (fallback): {current_broker_id}"
-                            )
 
                     # Tentar extrair dos leads
                     elif not broker_leads.empty and 'responsavel_id' in broker_leads.columns:
-                        responsavel_ids = broker_leads[
-                            'responsavel_id'].dropna().unique()
+                        responsavel_ids = broker_leads['responsavel_id'].dropna().unique()
                         if len(responsavel_ids) > 0:
                             current_broker_id = responsavel_ids[0]
-                            logger.debug(
-                                f"Broker ID identificado dos leads (fallback): {current_broker_id}"
-                            )
 
                 if current_broker_id is None:
-                    logger.error(
-                        "❌ Nenhum broker ID disponível - retornando 0")
+                    logger.error("❌ Nenhum broker ID disponível - retornando 0")
                     return 0
 
                 # Converter para int se necessário
@@ -2119,24 +2099,12 @@ class SupabaseClient:
                     current_broker_id = int(current_broker_id) if isinstance(
                         current_broker_id, (str, float)) else current_broker_id
                 except (ValueError, TypeError):
-                    logger.error(
-                        f"Erro ao converter broker_id {current_broker_id} para int"
-                    )
+                    logger.error(f"Erro ao converter broker_id {current_broker_id} para int")
                     return 0
 
-                logger.info(
-                    f"🎯 Usando broker_id: {current_broker_id} (consultas isoladas)"
-                )
-
-                # FUNÇÃO COMPLETAMENTE ISOLADA - ignora parâmetros de DataFrames
+                # Calcular usando função RPC otimizada
                 result = self._calculate_leads_perdidos_por_inatividade(
-                    current_broker_id, None,
-                    company_id)  # None indica que será ignorado
-
-                logger.info(
-                    f"🔥 LEADS_PERDIDOS calculado para broker {current_broker_id}: {result}"
-                )
-                logger.info(f"🏁 RESULTADO FINAL LEADS_PERDIDOS: {result}")
+                    current_broker_id, None, company_id)
 
                 return result
 
@@ -2214,16 +2182,11 @@ class SupabaseClient:
     def _calculate_leads_perdidos_por_inatividade(self, broker_id,
                                                   all_activities, company_id):
         """
-        Calcula leads perdidos por inatividade usando SQL direto.
-        
-        A lógica integra tudo em uma única query SQL otimizada que:
-        1. Encontra a etapa "Sem Contato"
-        2. Busca todas as atividades relevantes ordenadas por lead e tempo
-        3. Calcula perdas por inatividade (27 minutos sem mensagem)
+        Calcula leads perdidos por inatividade usando função RPC otimizada do Supabase.
         
         Args:
             broker_id: ID do corretor
-            all_activities: DataFrame (IGNORADO - usa SQL direto)
+            all_activities: DataFrame (IGNORADO - usa RPC direto)
             company_id: ID da empresa
 
         Returns:
@@ -2237,212 +2200,29 @@ class SupabaseClient:
             # Converter broker_id para o tipo correto
             broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
 
-            logger.info(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} - SQL DIRETO ===")
+            logger.info(f"🔍 Calculando SLA para broker {broker_id}")
 
-            # Query SQL única e otimizada que calcula SLA diretamente
-            sql_query = """
-            WITH sem_contato_stage AS (
-                SELECT stage_id 
-                FROM stages_list 
-                WHERE company_id = %s 
-                AND stage_name ILIKE '%%sem contato%%'
-                LIMIT 1
-            ),
-            atividades_relevantes AS (
-                SELECT 
-                    a.lead_id,
-                    a.user_id,
-                    a.tipo,
-                    a.responsavel_anterior::bigint as responsavel_anterior,
-                    a.responsavel_novo::bigint as responsavel_novo,
-                    a.status_anterior::bigint as status_anterior,
-                    a.status_novo::bigint as status_novo,
-                    a.criado_em,
-                    sc.stage_id as sem_contato_id
-                FROM activities a
-                CROSS JOIN sem_contato_stage sc
-                WHERE a.company_id = %s
-                AND a.tipo IN ('mudança_responsavel', 'mensagem_enviada', 'mudança_status')
-                AND a.lead_id IS NOT NULL
-                ORDER BY a.lead_id, a.criado_em
-            ),
-            perdas_sla AS (
-                SELECT DISTINCT
-                    lead_id,
-                    responsavel_anterior as broker_perdeu
-                FROM (
-                    SELECT 
-                        lead_id,
-                        responsavel_anterior,
-                        responsavel_novo,
-                        criado_em,
-                        LAG(criado_em) OVER (
-                            PARTITION BY lead_id, responsavel_anterior 
-                            ORDER BY criado_em
-                        ) as inicio_responsabilidade,
-                        sem_contato_id,
-                        -- Verifica se houve mensagem do responsável atual antes da mudança
-                        EXISTS(
-                            SELECT 1 FROM atividades_relevantes a2 
-                            WHERE a2.lead_id = ar.lead_id 
-                            AND a2.tipo = 'mensagem_enviada'
-                            AND a2.user_id = ar.responsavel_anterior
-                            AND a2.criado_em > COALESCE(
-                                (SELECT MAX(criado_em) FROM atividades_relevantes a3 
-                                 WHERE a3.lead_id = ar.lead_id 
-                                 AND a3.tipo = 'mudança_responsavel'
-                                 AND a3.responsavel_novo = ar.responsavel_anterior
-                                 AND a3.criado_em < ar.criado_em), 
-                                ar.criado_em - INTERVAL '1 hour'
-                            )
-                            AND a2.criado_em < ar.criado_em
-                        ) as teve_mensagem
-                    FROM atividades_relevantes ar
-                    WHERE tipo = 'mudança_responsavel'
-                    AND responsavel_anterior IS NOT NULL 
-                    AND responsavel_anterior != 0
-                    -- Verifica se o lead estava em "Sem Contato" no momento
-                    AND EXISTS(
-                        SELECT 1 FROM atividades_relevantes a_status
-                        WHERE a_status.lead_id = ar.lead_id
-                        AND a_status.tipo = 'mudança_status' 
-                        AND a_status.status_novo = ar.sem_contato_id
-                        AND a_status.criado_em <= ar.criado_em
-                        AND NOT EXISTS(
-                            SELECT 1 FROM atividades_relevantes a_saida
-                            WHERE a_saida.lead_id = ar.lead_id
-                            AND a_saida.tipo = 'mudança_status'
-                            AND a_saida.status_anterior = ar.sem_contato_id
-                            AND a_saida.criado_em > a_status.criado_em
-                            AND a_saida.criado_em <= ar.criado_em
-                        )
-                    )
-                ) mudancas_responsavel
-                WHERE EXTRACT(EPOCH FROM (criado_em - inicio_responsabilidade)) / 60 >= 27
-                AND NOT teve_mensagem
-                AND responsavel_anterior = %s
-            )
-            SELECT COUNT(*) as leads_perdidos
-            FROM perdas_sla;
-            """
-
-            logger.info("🔧 Executando SQL Query unificada para cálculo SLA:")
-            logger.debug(f"SQL: {sql_query}")
-            logger.info(f"Parâmetros: company_id={company_id}, broker_id={broker_id}")
-
-            # Executar a query SQL diretamente
-            try:
-                # Usar a conexão do Supabase para executar SQL raw
-                response = self.client.rpc('exec_sql', {
-                    'query': sql_query,
-                    'params': [company_id, company_id, broker_id]
-                }).execute()
-
-                if hasattr(response, 'error') and response.error:
-                    logger.error(f"❌ Erro na query SQL: {response.error}")
-                    # Fallback para método anterior se SQL direto falhar
-                    return self._calculate_leads_perdidos_fallback(broker_id, company_id)
-
-                if response.data and len(response.data) > 0:
-                    leads_perdidos_count = response.data[0].get('leads_perdidos', 0)
-                else:
-                    leads_perdidos_count = 0
-
-                logger.info(f"✅ Query SQL executada com sucesso")
-                logger.info(f"🎯 RESULTADO SQL DIRETO - Broker {broker_id}: {leads_perdidos_count} leads perdidos")
-
-                return leads_perdidos_count
-
-            except Exception as sql_error:
-                logger.error(f"❌ Erro ao executar SQL direto: {sql_error}")
-                logger.info("🔄 Tentando método fallback...")
-                return self._calculate_leads_perdidos_fallback(broker_id, company_id)
-
-        except Exception as e:
-            logger.error(f"❌ ERRO GERAL no cálculo SLA SQL para broker {broker_id}: {str(e)}")
-            return 0
-
-    def _calculate_leads_perdidos_fallback(self, broker_id, company_id):
-        """
-        Método fallback usando múltiplas queries se o SQL direto falhar.
-        """
-        try:
-            logger.info(f"🔄 Executando método fallback para broker {broker_id}")
-
-            # 1. Buscar etapa "Sem Contato"
-            stages_result = self.client.table("stages_list") \
-                .select("stage_id") \
-                .eq("company_id", company_id) \
-                .ilike("stage_name", "%sem contato%") \
-                .execute()
-
-            if not stages_result.data:
-                logger.warning("⚠️ Etapa 'Sem Contato' não encontrada")
-                return 0
-
-            sem_contato_stage_id = stages_result.data[0]['stage_id']
-            logger.info(f"✅ Etapa 'Sem Contato': {sem_contato_stage_id}")
-
-            # 2. Query para buscar mudanças de responsável com tempo >= 27 min sem mensagem
-            perdas_query = """
-            SELECT DISTINCT a1.lead_id
-            FROM activities a1
-            WHERE a1.company_id = %s
-            AND a1.tipo = 'mudança_responsavel'
-            AND a1.responsavel_anterior = %s
-            AND a1.responsavel_anterior IS NOT NULL
-            AND EXTRACT(EPOCH FROM (a1.criado_em - (
-                SELECT a2.criado_em FROM activities a2
-                WHERE a2.lead_id = a1.lead_id
-                AND a2.tipo = 'mudança_responsavel' 
-                AND a2.responsavel_novo = a1.responsavel_anterior
-                AND a2.criado_em < a1.criado_em
-                ORDER BY a2.criado_em DESC
-                LIMIT 1
-            ))) / 60 >= 27
-            AND NOT EXISTS(
-                SELECT 1 FROM activities a3
-                WHERE a3.lead_id = a1.lead_id
-                AND a3.tipo = 'mensagem_enviada'
-                AND a3.user_id = a1.responsavel_anterior
-                AND a3.criado_em > (
-                    SELECT a4.criado_em FROM activities a4
-                    WHERE a4.lead_id = a1.lead_id
-                    AND a4.tipo = 'mudança_responsavel'
-                    AND a4.responsavel_novo = a1.responsavel_anterior
-                    AND a4.criado_em < a1.criado_em
-                    ORDER BY a4.criado_em DESC
-                    LIMIT 1
-                )
-                AND a3.criado_em < a1.criado_em
-            )
-            AND EXISTS(
-                SELECT 1 FROM activities a5
-                WHERE a5.lead_id = a1.lead_id
-                AND a5.tipo = 'mudança_status'
-                AND a5.status_novo = %s
-                AND a5.criado_em <= a1.criado_em
-            )
-            """
-
-            # Executar query de fallback
-            fallback_result = self.client.rpc('exec_sql', {
-                'query': perdas_query,
-                'params': [company_id, broker_id, sem_contato_stage_id]
+            # Usar função RPC otimizada do Supabase
+            response = self.client.rpc('calculate_sla_leads_perdidos', {
+                'p_company_id': company_id,
+                'p_broker_id': broker_id
             }).execute()
 
-            if hasattr(fallback_result, 'error') and fallback_result.error:
-                logger.error(f"❌ Erro no fallback: {fallback_result.error}")
+            if hasattr(response, 'error') and response.error:
+                logger.error(f"❌ Erro na RPC SLA: {response.error}")
                 return 0
 
-            leads_perdidos = len(fallback_result.data) if fallback_result.data else 0
-            logger.info(f"✅ Fallback executado: {leads_perdidos} leads perdidos")
+            leads_perdidos_count = response.data if response.data is not None else 0
+            
+            logger.info(f"✅ SLA calculado - Broker {broker_id}: {leads_perdidos_count} leads perdidos")
 
-            return leads_perdidos
+            return leads_perdidos_count
 
         except Exception as e:
-            logger.error(f"❌ Erro no método fallback: {e}")
+            logger.error(f"❌ Erro no cálculo SLA para broker {broker_id}: {str(e)}")
             return 0
+
+    
 
     def _process_lead_sla_state_machine(self, lead_id, lead_activities,
                                         sem_contato_stage_id,
