@@ -2197,6 +2197,8 @@ class SupabaseClient:
             # Converter broker_id para o tipo correto
             broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
 
+            logger.info(f"🔄 Executando RPC calculate_sla_leads_perdidos para broker {broker_id}")
+
             # Usar função RPC otimizada do Supabase com conversão de tipos
             response = self.client.rpc('calculate_sla_leads_perdidos', {
                 'p_company_id': str(company_id),
@@ -2209,11 +2211,117 @@ class SupabaseClient:
 
             leads_perdidos_count = response.data if response.data is not None else 0
 
+            logger.info(f"✅ RPC finalizada - {leads_perdidos_count} leads perdidos para broker {broker_id}")
+
             return leads_perdidos_count
 
         except Exception as e:
             logger.error(f"❌ Erro no cálculo SLA para broker {broker_id}: {str(e)}")
             return 0
+
+    def get_sla_calculation_logs(self, company_id, broker_id=None, execution_id=None, limit=100):
+        """
+        Busca logs detalhados do cálculo de SLA.
+        
+        Args:
+            company_id: ID da empresa
+            broker_id: ID do corretor (opcional)
+            execution_id: ID de execução específica (opcional)
+            limit: Limite de registros (padrão: 100)
+
+        Returns:
+            list: Lista de logs
+        """
+        try:
+            query = self.client.table("sla_calculation_logs").select("*")
+            
+            if company_id:
+                query = query.eq("company_id", company_id)
+            
+            if broker_id:
+                query = query.eq("broker_id", broker_id)
+            
+            if execution_id:
+                query = query.eq("execution_id", execution_id)
+            
+            result = query.order("created_at", desc=True).limit(limit).execute()
+            
+            if hasattr(result, "error") and result.error:
+                logger.error(f"Erro ao buscar logs SLA: {result.error}")
+                return []
+
+            return result.data if result.data else []
+
+        except Exception as e:
+            logger.error(f"Erro ao buscar logs SLA: {str(e)}")
+            return []
+
+    def get_sla_execution_summary(self, company_id, execution_id):
+        """
+        Busca resumo de uma execução específica do cálculo SLA.
+        
+        Args:
+            company_id: ID da empresa
+            execution_id: ID da execução
+
+        Returns:
+            dict: Resumo da execução
+        """
+        try:
+            logs = self.get_sla_calculation_logs(company_id, execution_id=execution_id, limit=1000)
+            
+            if not logs:
+                return {}
+
+            summary = {
+                'execution_id': execution_id,
+                'company_id': company_id,
+                'broker_id': logs[0].get('broker_id'),
+                'broker_name': logs[0].get('broker_name'),
+                'total_logs': len(logs),
+                'start_time': None,
+                'end_time': None,
+                'execution_time_ms': None,
+                'leads_processed': 0,
+                'leads_perdidos': 0,
+                'steps': {},
+                'errors': [],
+                'warnings': []
+            }
+
+            for log in logs:
+                step = log.get('step_name')
+                level = log.get('log_level')
+                
+                # Contabilizar steps
+                if step not in summary['steps']:
+                    summary['steps'][step] = 0
+                summary['steps'][step] += 1
+                
+                # Capturar tempos
+                if step == 'INIT' and not summary['start_time']:
+                    summary['start_time'] = log.get('created_at')
+                elif step == 'RESULT':
+                    summary['end_time'] = log.get('created_at')
+                    summary['execution_time_ms'] = log.get('execution_time_ms')
+                    summary['leads_processed'] = log.get('leads_processed', 0)
+                    
+                    # Extrair leads perdidos do additional_data
+                    additional_data = log.get('additional_data', {})
+                    if isinstance(additional_data, dict):
+                        summary['leads_perdidos'] = additional_data.get('leads_perdidos', 0)
+                
+                # Coletar erros e warnings
+                if level == 'ERROR':
+                    summary['errors'].append(log.get('message'))
+                elif level == 'WARNING':
+                    summary['warnings'].append(log.get('message'))
+
+            return summary
+
+        except Exception as e:
+            logger.error(f"Erro ao gerar resumo da execução SLA: {str(e)}")
+            return {}
 
     
 

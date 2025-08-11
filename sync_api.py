@@ -91,7 +91,7 @@ def continuous_sync_worker(company_id, config):
                 sync_status[company_id].update({
                     'status':
                     'syncing',
-                    'last_health_check':
+                    'last_sync_start':
                     datetime.now()
                 })
 
@@ -111,8 +111,9 @@ def continuous_sync_worker(company_id, config):
                 activities = kommo_api.get_activities(company_id=company_id)
 
                 logger.info(f"[{company_id}] Saving SLA metrics...")
+                # Pass the logger to the save_sla_metrics method for detailed logging
                 sla_metrics = local_supabase.save_sla_metrics(
-                    company_id=company_id)
+                    company_id=company_id, logger=logger)
 
                 # Add company_id to all DataFrames
                 if brokers is not None and not brokers.empty:
@@ -619,8 +620,7 @@ def webhook():
         elif isinstance(webhook_data, list):
             data_objects = webhook_data
             logger.info(
-                f"Webhook data is already a list with {len(data_objects)} objects"
-            )
+                f"Webhook data is already a list with {len(data_objects)} objects")
 
         if not data_objects:
             logger.warning(
@@ -742,6 +742,55 @@ def webhook():
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/sla-logs/<company_id>')
+def get_sla_logs(company_id):
+    """Endpoint para consultar logs do cálculo SLA"""
+    try:
+        broker_id = request.args.get('broker_id')
+        execution_id = request.args.get('execution_id')
+        limit = int(request.args.get('limit', 100))
+
+        logs = supabase.get_sla_calculation_logs(
+            company_id=company_id,
+            broker_id=int(broker_id) if broker_id else None,
+            execution_id=execution_id,
+            limit=limit
+        )
+
+        return jsonify({
+            'status': 'success',
+            'company_id': company_id,
+            'total_logs': len(logs),
+            'logs': logs
+        })
+
+    except Exception as e:
+        logger.error(f"Erro ao buscar logs SLA: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/sla-summary/<company_id>/<execution_id>')
+def get_sla_execution_summary(company_id, execution_id):
+    """Endpoint para consultar resumo de execução do cálculo SLA"""
+    try:
+        summary = supabase.get_sla_execution_summary(company_id, execution_id)
+
+        return jsonify({
+            'status': 'success',
+            'summary': summary
+        })
+
+    except Exception as e:
+        logger.error(f"Erro ao buscar resumo SLA: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 
 if __name__ == '__main__':
