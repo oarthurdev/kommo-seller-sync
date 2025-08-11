@@ -2175,7 +2175,7 @@ class SupabaseClient:
 
         Args:
             broker_id: ID do corretor
-            all_activities: DataFrame com todas as atividades
+            all_activities: DataFrame com todas as atividades (não usado - busca direto do banco)
             company_id: ID da empresa
 
         Returns:
@@ -2191,17 +2191,50 @@ class SupabaseClient:
 
             logger.debug(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} ===")
 
-            # Buscar todas as atividades relacionadas ao broker (mudanças de responsável e mensagens)
+            # 1. BUSCAR LEADS NA ETAPA "SEM CONTATO" DIRETO DO BANCO
             try:
-                # Buscar atividades de mudança de responsável onde o broker foi envolvido
+                # Primeiro, buscar o stage_id da etapa "Sem Contato"
+                stages_query = self.client.table("stages_list").select("stage_id, stage_name") \
+                    .eq("company_id", company_id) \
+                    .ilike("stage_name", "%sem contato%")
+                
+                stages_result = stages_query.execute()
+                
+                if not stages_result.data:
+                    logger.warning("Etapa 'Sem Contato' não encontrada na empresa")
+                    return 0
+                
+                sem_contato_stage_id = stages_result.data[0]['stage_id']
+                logger.debug(f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}")
+
+                # Buscar leads que estão ou passaram pela etapa "Sem Contato"
+                leads_query = self.client.table("leads").select("id, responsavel_id, status_id, criado_em") \
+                    .eq("company_id", company_id) \
+                    .eq("status_id", sem_contato_stage_id)
+                
+                leads_result = leads_query.execute()
+                
+                if not leads_result.data:
+                    logger.debug("Nenhum lead encontrado na etapa 'Sem Contato'")
+                    # Também buscar leads que já saíram da etapa através das atividades
+                else:
+                    logger.debug(f"Encontrados {len(leads_result.data)} leads na etapa 'Sem Contato'")
+
+            except Exception as e:
+                logger.error(f"Erro ao buscar leads na etapa 'Sem Contato': {e}")
+                return 0
+
+            # 2. BUSCAR TODAS AS ATIVIDADES RELEVANTES DIRETO DO BANCO
+            try:
+                # Buscar todas as atividades de mudança de responsável e mensagens
                 activities_query = self.client.table("activities").select("*") \
                     .eq("company_id", company_id) \
-                    .in_("tipo", ["mudança_responsavel", "mensagem_enviada"])
+                    .in_("tipo", ["mudança_responsavel", "mensagem_enviada", "mudança_status"])
 
                 activities_result = activities_query.execute()
 
                 if not activities_result.data:
-                    logger.debug("Nenhuma atividade de mudança de responsável ou mensagem encontrada")
+                    logger.debug("Nenhuma atividade relevante encontrada")
                     return 0
 
                 activities_df = pd.DataFrame(activities_result.data)
@@ -2211,25 +2244,41 @@ class SupabaseClient:
                     activities_df['criado_em'] = pd.to_datetime(
                         activities_df['criado_em'], errors='coerce', utc=True)
 
-                logger.debug(f"Encontradas {len(activities_df)} atividades de mudança/mensagem")
+                logger.debug(f"Encontradas {len(activities_df)} atividades relevantes")
 
             except Exception as e:
                 logger.error(f"Erro ao buscar atividades: {e}")
                 return 0
 
-            # Agrupar por lead_id e processar cada lead
+            # 3. PROCESSAR TIMELINE DE CADA LEAD
             leads_perdidos_count = 0
             
             if 'lead_id' not in activities_df.columns:
                 logger.warning("Coluna 'lead_id' não encontrada nas atividades")
                 return 0
 
-            # Processar cada lead com atividades
+            # Buscar todos os leads que tiveram atividades relacionadas ao fluxo de responsabilidade
+            unique_lead_ids = set()
+            
+            # Leads que têm atividades de mudança de responsável/status ou mensagens
             for lead_id in activities_df['lead_id'].dropna().unique():
-                lead_activities = activities_df[activities_df['lead_id'] == lead_id].sort_values('criado_em')
+                unique_lead_ids.add(str(lead_id))
+            
+            # Adicionar leads que estão atualmente em "Sem Contato"
+            if leads_result.data:
+                for lead in leads_result.data:
+                    unique_lead_ids.add(str(lead['id']))
+
+            logger.debug(f"Processando {len(unique_lead_ids)} leads únicos")
+
+            # Processar cada lead
+            for lead_id in unique_lead_ids:
+                lead_activities = activities_df[
+                    activities_df['lead_id'].astype(str) == str(lead_id)
+                ].sort_values('criado_em')
                 
                 perdas_lead = self._process_lead_responsibility_timeline(
-                    lead_id, lead_activities, broker_id
+                    lead_id, lead_activities, broker_id, sem_contato_stage_id
                 )
                 
                 leads_perdidos_count += perdas_lead
@@ -2247,16 +2296,22 @@ class SupabaseClient:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return 0
 
-    def _process_lead_responsibility_timeline(self, lead_id, lead_activities, target_broker_id):
+    def _process_lead_responsibility_timeline(self, lead_id, lead_activities, target_broker_id, sem_contato_stage_id):
         """
         Processa a timeline de responsabilidade de um lead específico seguindo o fluxo correto.
         
         Fluxo:
-        1. Lead criado com responsavel_id = 0
+        1. Lead criado com responsavel_id = 0, entra na etapa "Sem Contato"
         2. Primeiro mudança_responsavel: responsavel_novo assume (responsavel_anterior = 0)
         3. Se não enviar mensagem em 27min, nova mudança_responsavel
         4. responsavel_anterior = quem perdeu, responsavel_novo = quem recebeu
-        5. Continua até alguém enviar mensagem
+        5. Continua até alguém enviar mensagem OU sair da etapa "Sem Contato"
+        
+        Args:
+            lead_id: ID do lead
+            lead_activities: DataFrame com atividades do lead
+            target_broker_id: ID do broker alvo
+            sem_contato_stage_id: ID da etapa "Sem Contato"
         
         Returns:
             int: quantidade de vezes que o target_broker_id perdeu este lead
@@ -2270,6 +2325,7 @@ class SupabaseClient:
             current_responsible = None
             responsibility_start_time = None
             sla_timeout_minutes = 27
+            is_in_sem_contato = False
             
             # Processar cada atividade em ordem cronológica
             for _, activity in lead_activities.iterrows():
@@ -2278,8 +2334,26 @@ class SupabaseClient:
                 
                 logger.debug(f"    📅 {activity_time}: {activity_type}")
                 
-                # EVENTO: Mudança de responsável
-                if activity_type == 'mudança_responsavel':
+                # EVENTO: Mudança de status - verificar entrada/saída de "Sem Contato"
+                if activity_type == 'mudança_status':
+                    status_novo = activity.get('status_novo')
+                    status_anterior = activity.get('status_anterior') 
+                    
+                    # Entrada na etapa "Sem Contato"
+                    if status_novo == sem_contato_stage_id:
+                        is_in_sem_contato = True
+                        logger.debug(f"      🚪 Lead ENTROU na etapa 'Sem Contato'")
+                        
+                    # Saída da etapa "Sem Contato"
+                    elif status_anterior == sem_contato_stage_id and status_novo != sem_contato_stage_id:
+                        is_in_sem_contato = False
+                        logger.debug(f"      🚪 Lead SAIU da etapa 'Sem Contato'")
+                        # Parar contagem de SLA - lead não está mais em "Sem Contato"
+                        current_responsible = None
+                        responsibility_start_time = None
+                
+                # EVENTO: Mudança de responsável (só conta se estiver em "Sem Contato")
+                elif activity_type == 'mudança_responsavel' and is_in_sem_contato:
                     responsavel_anterior = activity.get('responsavel_anterior')
                     responsavel_novo = activity.get('responsavel_novo')
                     
@@ -2296,7 +2370,7 @@ class SupabaseClient:
                         except (ValueError, TypeError):
                             responsavel_novo = None
                     
-                    logger.debug(f"      🔄 Mudança: {responsavel_anterior} → {responsavel_novo}")
+                    logger.debug(f"      🔄 Mudança responsável: {responsavel_anterior} → {responsavel_novo}")
                     
                     # Verificar se o responsável anterior perdeu por inatividade
                     if (current_responsible is not None and 
@@ -2316,14 +2390,14 @@ class SupabaseClient:
                         else:
                             logger.debug(f"      ✅ Mudança antes de {sla_timeout_minutes} min - SLA ok")
                     
-                    # Novo responsável assume
+                    # Novo responsável assume (só se não for 0)
                     if responsavel_novo and responsavel_novo != 0:
                         current_responsible = responsavel_novo
                         responsibility_start_time = activity_time
                         logger.debug(f"      👤 Novo responsável: {current_responsible} (início: {activity_time})")
                 
-                # EVENTO: Mensagem enviada (SALVA o SLA)
-                elif activity_type == 'mensagem_enviada':
+                # EVENTO: Mensagem enviada (SALVA o SLA - só se estiver em "Sem Contato")
+                elif activity_type == 'mensagem_enviada' and is_in_sem_contato:
                     user_id = activity.get('user_id')
                     
                     if user_id is not None:
@@ -2339,12 +2413,11 @@ class SupabaseClient:
                         
                         time_diff_minutes = (activity_time - responsibility_start_time).total_seconds() / 60
                         logger.debug(f"      💬 MENSAGEM do responsável {user_id} em {time_diff_minutes:.1f} min")
-                        logger.debug(f"      ✅ SLA CUMPRIDO - lead não será mais perdido")
+                        logger.debug(f"      ✅ SLA CUMPRIDO - lead salvo da perda")
                         
-                        # Lead foi salvo, não haverá mais perdas
+                        # Lead foi salvo, não haverá mais perdas por inatividade
                         current_responsible = None
                         responsibility_start_time = None
-                        break
                     else:
                         logger.debug(f"      💬 Mensagem de usuário {user_id} (não é o responsável atual)")
             
