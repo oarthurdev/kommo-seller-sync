@@ -2214,17 +2214,16 @@ class SupabaseClient:
     def _calculate_leads_perdidos_por_inatividade(self, broker_id,
                                                   all_activities, company_id):
         """
-        Calcula leads perdidos por inatividade seguindo o fluxo correto:
-
-        1. Lead é criado na etapa "Sem Contato" com responsavel_id = 0
-        2. Responsável é definido via atividade mudança_responsavel (responsavel_novo)
-        3. Verifica se esse responsável enviou mensagem em 27 minutos
-        4. Se não enviou, há mudança_responsavel (responsavel_anterior = quem perdeu)
-        5. Processo continua até alguém enviar mensagem
-
+        Calcula leads perdidos por inatividade usando SQL direto.
+        
+        A lógica integra tudo em uma única query SQL otimizada que:
+        1. Encontra a etapa "Sem Contato"
+        2. Busca todas as atividades relevantes ordenadas por lead e tempo
+        3. Calcula perdas por inatividade (27 minutos sem mensagem)
+        
         Args:
             broker_id: ID do corretor
-            all_activities: DataFrame com todas as atividades (IGNORADO - faz próprias consultas)
+            all_activities: DataFrame (IGNORADO - usa SQL direto)
             company_id: ID da empresa
 
         Returns:
@@ -2236,292 +2235,213 @@ class SupabaseClient:
                 return 0
 
             # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id,
-                                                     (str,
-                                                      float)) else broker_id
+            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
 
-            logger.info(
-                f"\n=== CALCULANDO SLA PARA BROKER {broker_id} - CONSULTAS ISOLADAS ==="
+            logger.info(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} - SQL DIRETO ===")
+
+            # Query SQL única e otimizada que calcula SLA diretamente
+            sql_query = """
+            WITH sem_contato_stage AS (
+                SELECT stage_id 
+                FROM stages_list 
+                WHERE company_id = %s 
+                AND stage_name ILIKE '%%sem contato%%'
+                LIMIT 1
+            ),
+            atividades_relevantes AS (
+                SELECT 
+                    a.lead_id,
+                    a.user_id,
+                    a.tipo,
+                    a.responsavel_anterior::bigint as responsavel_anterior,
+                    a.responsavel_novo::bigint as responsavel_novo,
+                    a.status_anterior::bigint as status_anterior,
+                    a.status_novo::bigint as status_novo,
+                    a.criado_em,
+                    sc.stage_id as sem_contato_id
+                FROM activities a
+                CROSS JOIN sem_contato_stage sc
+                WHERE a.company_id = %s
+                AND a.tipo IN ('mudança_responsavel', 'mensagem_enviada', 'mudança_status')
+                AND a.lead_id IS NOT NULL
+                ORDER BY a.lead_id, a.criado_em
+            ),
+            perdas_sla AS (
+                SELECT DISTINCT
+                    lead_id,
+                    responsavel_anterior as broker_perdeu
+                FROM (
+                    SELECT 
+                        lead_id,
+                        responsavel_anterior,
+                        responsavel_novo,
+                        criado_em,
+                        LAG(criado_em) OVER (
+                            PARTITION BY lead_id, responsavel_anterior 
+                            ORDER BY criado_em
+                        ) as inicio_responsabilidade,
+                        sem_contato_id,
+                        -- Verifica se houve mensagem do responsável atual antes da mudança
+                        EXISTS(
+                            SELECT 1 FROM atividades_relevantes a2 
+                            WHERE a2.lead_id = ar.lead_id 
+                            AND a2.tipo = 'mensagem_enviada'
+                            AND a2.user_id = ar.responsavel_anterior
+                            AND a2.criado_em > COALESCE(
+                                (SELECT MAX(criado_em) FROM atividades_relevantes a3 
+                                 WHERE a3.lead_id = ar.lead_id 
+                                 AND a3.tipo = 'mudança_responsavel'
+                                 AND a3.responsavel_novo = ar.responsavel_anterior
+                                 AND a3.criado_em < ar.criado_em), 
+                                ar.criado_em - INTERVAL '1 hour'
+                            )
+                            AND a2.criado_em < ar.criado_em
+                        ) as teve_mensagem
+                    FROM atividades_relevantes ar
+                    WHERE tipo = 'mudança_responsavel'
+                    AND responsavel_anterior IS NOT NULL 
+                    AND responsavel_anterior != 0
+                    -- Verifica se o lead estava em "Sem Contato" no momento
+                    AND EXISTS(
+                        SELECT 1 FROM atividades_relevantes a_status
+                        WHERE a_status.lead_id = ar.lead_id
+                        AND a_status.tipo = 'mudança_status' 
+                        AND a_status.status_novo = ar.sem_contato_id
+                        AND a_status.criado_em <= ar.criado_em
+                        AND NOT EXISTS(
+                            SELECT 1 FROM atividades_relevantes a_saida
+                            WHERE a_saida.lead_id = ar.lead_id
+                            AND a_saida.tipo = 'mudança_status'
+                            AND a_saida.status_anterior = ar.sem_contato_id
+                            AND a_saida.criado_em > a_status.criado_em
+                            AND a_saida.criado_em <= ar.criado_em
+                        )
+                    )
+                ) mudancas_responsavel
+                WHERE EXTRACT(EPOCH FROM (criado_em - inicio_responsabilidade)) / 60 >= 27
+                AND NOT teve_mensagem
+                AND responsavel_anterior = %s
             )
+            SELECT COUNT(*) as leads_perdidos
+            FROM perdas_sla;
+            """
 
-            # 1. BUSCAR ETAPA "SEM CONTATO" - CONSULTA DIRETA E ISOLADA
-            sem_contato_stage_id = None
+            logger.info("🔧 Executando SQL Query unificada para cálculo SLA:")
+            logger.debug(f"SQL: {sql_query}")
+            logger.info(f"Parâmetros: company_id={company_id}, broker_id={broker_id}")
+
+            # Executar a query SQL diretamente
             try:
-                logger.debug("🔍 Buscando etapa 'Sem Contato' no banco...")
-                logger.info(
-                    f"🔧 SQL QUERY 1 - Buscando etapa 'Sem Contato': SELECT stage_id, stage_name FROM stages_list WHERE company_id = '{company_id}' AND stage_name ILIKE '%sem contato%'"
-                )
+                # Usar a conexão do Supabase para executar SQL raw
+                response = self.client.rpc('exec_sql', {
+                    'query': sql_query,
+                    'params': [company_id, company_id, broker_id]
+                }).execute()
 
-                stages_query = self.client.table("stages_list").select("stage_id, stage_name") \
-                    .eq("company_id", company_id) \
-                    .ilike("stage_name", "%sem contato%")
+                if hasattr(response, 'error') and response.error:
+                    logger.error(f"❌ Erro na query SQL: {response.error}")
+                    # Fallback para método anterior se SQL direto falhar
+                    return self._calculate_leads_perdidos_fallback(broker_id, company_id)
 
-                stages_result = stages_query.execute()
-
-                if not stages_result.data:
-                    logger.warning(
-                        "⚠️ Etapa 'Sem Contato' não encontrada na empresa")
-                    logger.info(
-                        f"🔧 RESULTADO SQL QUERY 1: Nenhum resultado encontrado"
-                    )
-                    return 0
-
-                sem_contato_stage_id = stages_result.data[0]['stage_id']
-                logger.info(
-                    f"✅ Etapa 'Sem Contato' encontrada: ID {sem_contato_stage_id}"
-                )
-                logger.info(
-                    f"🔧 RESULTADO SQL QUERY 1: Encontrados {len(stages_result.data)} registros, usando stage_id = {sem_contato_stage_id}"
-                )
-
-            except Exception as e:
-                logger.error(f"❌ Erro ao buscar etapa 'Sem Contato': {e}")
-                return 0
-
-            # 2. BUSCAR TODOS OS LEADS DA EMPRESA QUE PASSARAM PELA ETAPA "SEM CONTATO" - CONSULTA DIRETA E FILTRADA
-            all_leads_data = []
-            try:
-                logger.debug(
-                    "🔍 Buscando leads que passaram pela etapa 'Sem Contato' no banco..."
-                )
-                logger.info(
-                    f"🔧 SQL QUERY 2 - Buscando leads com filtro: SELECT id, responsavel_id, status_id, criado_em, atualizado_em FROM leads WHERE company_id = '{company_id}' AND status_id = {sem_contato_stage_id}"
-                )
-
-                # Buscar leads que estão atualmente na etapa "Sem Contato"
-                leads_query = self.client.table("leads").select("id, responsavel_id, status_id, criado_em, atualizado_em") \
-                    .eq("company_id", company_id) \
-                    .eq("status_id", sem_contato_stage_id)
-
-                leads_result = leads_query.execute()
-
-                if leads_result.data:
-                    all_leads_data = leads_result.data
-                    logger.info(
-                        f"✅ Encontrados {len(all_leads_data)} leads na etapa 'Sem Contato'"
-                    )
-                    logger.info(
-                        f"🔧 RESULTADO SQL QUERY 2: {len(all_leads_data)} leads retornados (filtro: status_id = {sem_contato_stage_id})"
-                    )
-
-                    # Log de alguns leads para debug
-                    if len(all_leads_data) > 0:
-                        sample_leads = all_leads_data[:3]
-                        logger.debug(
-                            f"🔧 AMOSTRA LEADS (Sem Contato): {sample_leads}")
+                if response.data and len(response.data) > 0:
+                    leads_perdidos_count = response.data[0].get('leads_perdidos', 0)
                 else:
-                    logger.info(
-                        "ℹ️ Nenhum lead encontrado atualmente na etapa 'Sem Contato'"
-                    )
-                    logger.info(
-                        f"🔧 RESULTADO SQL QUERY 2: Nenhum lead na etapa 'Sem Contato' (status_id = {sem_contato_stage_id})"
-                    )
+                    leads_perdidos_count = 0
 
-                if not all_leads_data:
-                    logger.warning(
-                        "⚠️ Nenhum lead encontrado (atual ou histórico) relacionado à etapa 'Sem Contato'"
-                    )
-                    return 0
+                logger.info(f"✅ Query SQL executada com sucesso")
+                logger.info(f"🎯 RESULTADO SQL DIRETO - Broker {broker_id}: {leads_perdidos_count} leads perdidos")
 
-            except Exception as e:
-                logger.error(f"❌ Erro ao buscar leads: {e}")
-                return 0
+                return leads_perdidos_count
 
-            # 3. BUSCAR E PROCESSAR ATIVIDADES DIRETAMENTE - LÓGICA SLA INTEGRADA
-            try:
-                logger.debug(
-                    "🔍 Buscando e processando atividades com lógica SLA integrada..."
-                )
-                logger.info(
-                    f"🔧 SQL QUERY 3 - Processamento SLA: SELECT lead_id, user_id, tipo, responsavel_anterior, responsavel_novo, status_anterior, status_novo, criado_em FROM activities WHERE company_id = '{company_id}' AND tipo IN ('mudança_responsavel', 'mensagem_enviada', 'mudança_status') ORDER BY lead_id, criado_em"
-                )
-
-                # Query para buscar atividades ordenadas por lead e data
-                activities_query = self.client.table("activities").select(
-                    "lead_id, user_id, tipo, responsavel_anterior, responsavel_novo, status_anterior, status_novo, criado_em"
-                ).eq("company_id", company_id) \
-                 .in_("tipo", ["mudança_responsavel", "mensagem_enviada", "mudança_status"]) \
-                 .order("lead_id") \
-                 .order("criado_em")
-
-                activities_result = activities_query.execute()
-
-                if not activities_result.data:
-                    logger.warning("⚠️ Nenhuma atividade relevante encontrada")
-                    return 0
-
-                all_activities_data = activities_result.data
-                logger.info(
-                    f"✅ Encontradas {len(all_activities_data)} atividades relevantes"
-                )
-
-                # Contar por tipo para debug
-                tipos_count = {}
-                for activity in all_activities_data:
-                    tipo = activity.get('tipo', 'desconhecido')
-                    tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
-
-                logger.debug(f"🔧 TIPOS DE ATIVIDADE: {tipos_count}")
-
-            except Exception as e:
-                logger.error(f"❌ Erro ao buscar atividades: {e}")
-                return 0
-
-            # 4. PROCESSAR SLA COM LÓGICA CORRIGIDA
-            try:
-                leads_perdidos_count = 0
-                sla_timeout_minutes = 27
-                
-                # Agrupar atividades por lead_id e ordenar por tempo
-                leads_activities = {}
-                for activity in all_activities_data:
-                    lead_id = str(activity.get('lead_id', ''))
-                    if not lead_id or lead_id == 'None':
-                        continue
-                        
-                    if lead_id not in leads_activities:
-                        leads_activities[lead_id] = []
-                    leads_activities[lead_id].append(activity)
-                
-                # Ordenar atividades de cada lead por data
-                for lead_id in leads_activities:
-                    leads_activities[lead_id].sort(key=lambda x: pd.to_datetime(x['criado_em'], errors='coerce', utc=True))
-
-                logger.info(f"🎯 Processando {len(leads_activities)} leads com atividades")
-
-                # Processar cada lead individualmente
-                for lead_id, activities in leads_activities.items():
-                    lead_state = {
-                        'is_sem_contato': False,
-                        'current_responsible': None,
-                        'responsibility_start_time': None,
-                        'had_message': False
-                    }
-
-                    logger.debug(f"🔧 Analisando lead {lead_id} com {len(activities)} atividades")
-
-                    for activity in activities:
-                        activity_time = pd.to_datetime(activity['criado_em'], errors='coerce', utc=True)
-                        activity_type = activity.get('tipo', '')
-
-                        # MUDANÇA DE STATUS
-                        if activity_type == 'mudança_status':
-                            status_novo = activity.get('status_novo')
-                            status_anterior = activity.get('status_anterior')
-
-                            # Entrada em "Sem Contato"
-                            if status_novo == sem_contato_stage_id:
-                                lead_state['is_sem_contato'] = True
-                                logger.debug(f"   ➡️ Lead {lead_id} entrou em 'Sem Contato' em {activity_time}")
-
-                            # Saída de "Sem Contato"  
-                            elif status_anterior == sem_contato_stage_id and status_novo != sem_contato_stage_id:
-                                lead_state['is_sem_contato'] = False
-                                lead_state['current_responsible'] = None
-                                lead_state['responsibility_start_time'] = None
-                                lead_state['had_message'] = False
-                                logger.debug(f"   ⬅️ Lead {lead_id} saiu de 'Sem Contato' em {activity_time}")
-
-                        # MUDANÇA DE RESPONSÁVEL (apenas se em "Sem Contato")
-                        elif activity_type == 'mudança_responsavel' and lead_state['is_sem_contato']:
-                            responsavel_anterior = activity.get('responsavel_anterior')
-                            responsavel_novo = activity.get('responsavel_novo')
-
-                            # Converter para int se necessário
-                            try:
-                                if responsavel_anterior is not None:
-                                    responsavel_anterior = int(responsavel_anterior)
-                                if responsavel_novo is not None:
-                                    responsavel_novo = int(responsavel_novo)
-                            except (ValueError, TypeError):
-                                continue
-
-                            # Se havia um responsável anterior e é o momento de mudança
-                            if (lead_state['current_responsible'] is not None and 
-                                lead_state['responsibility_start_time'] is not None and
-                                responsavel_anterior == lead_state['current_responsible']):
-
-                                # Calcular tempo de responsabilidade
-                                time_diff_minutes = (activity_time - lead_state['responsibility_start_time']).total_seconds() / 60
-                                
-                                logger.debug(f"   🔄 Mudança responsável: {responsavel_anterior} → {responsavel_novo}")
-                                logger.debug(f"   ⏱️ Tempo responsabilidade: {time_diff_minutes:.1f} min")
-                                logger.debug(f"   💬 Teve mensagem: {lead_state['had_message']}")
-
-                                # Verificar se passou de 27 minutos SEM mensagem
-                                if time_diff_minutes >= sla_timeout_minutes and not lead_state['had_message']:
-                                    if lead_state['current_responsible'] == broker_id:
-                                        leads_perdidos_count += 1
-                                        logger.info(f"   🔥 LEAD PERDIDO! Lead {lead_id}, broker {broker_id}, tempo: {time_diff_minutes:.1f}min sem mensagem")
-                                    else:
-                                        logger.debug(f"   ⚠️ Perda detectada para outro broker ({lead_state['current_responsible']})")
-
-                            # Definir novo responsável e reiniciar contadores
-                            if responsavel_novo and responsavel_novo != 0:
-                                lead_state['current_responsible'] = responsavel_novo
-                                lead_state['responsibility_start_time'] = activity_time
-                                lead_state['had_message'] = False  # Zerar flag de mensagem
-                                logger.debug(f"   👤 Novo responsável {responsavel_novo} assume em {activity_time}")
-
-                        # MENSAGEM ENVIADA (marca que responsável atual enviou mensagem)
-                        elif activity_type == 'mensagem_enviada' and lead_state['is_sem_contato']:
-                            user_id = activity.get('user_id')
-                            
-                            try:
-                                if user_id is not None:
-                                    user_id = int(user_id)
-                            except (ValueError, TypeError):
-                                continue
-
-                            # Se mensagem é do responsável atual
-                            if (lead_state['current_responsible'] is not None and 
-                                user_id == lead_state['current_responsible']):
-                                
-                                if lead_state['responsibility_start_time']:
-                                    time_diff_minutes = (activity_time - lead_state['responsibility_start_time']).total_seconds() / 60
-                                    lead_state['had_message'] = True
-                                    logger.debug(f"   ✅ Mensagem enviada por responsável {user_id} em {time_diff_minutes:.1f}min - SLA salvo!")
-
-                logger.info(f"📊 Processados {len(leads_activities)} leads únicos")
-
-            except Exception as e:
-                logger.error(f"❌ Erro no processamento SLA: {e}")
-                return 0
-
-            logger.info(
-                f"🎯 RESULTADO FINAL - Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade"
-            )
-            logger.info(
-                f"📊 Análise baseada em {len(all_leads_data)} leads e {len(all_activities_data)} atividades"
-            )
-            logger.info(f"🔧 RESUMO DAS QUERIES:")
-            logger.info(
-                f"    QUERY 1: Etapa 'Sem Contato' → stage_id = {sem_contato_stage_id}"
-            )
-            logger.info(
-                f"    QUERY 2: Leads da empresa → {len(all_leads_data)} registros"
-            )
-            logger.info(
-                f"    QUERY 3: Processamento SLA → {len(all_activities_data)} atividades"
-            )
-            logger.info(
-                f"    RESULTADO: {leads_perdidos_count} leads perdidos por inatividade"
-            )
-            
-            # Log adicional para debug do broker específico
-            if leads_perdidos_count > 0:
-                logger.info(f"🚨 ATENÇÃO: Broker {broker_id} teve {leads_perdidos_count} leads perdidos por não responder em 27 minutos")
-            else:
-                logger.info(f"✅ Broker {broker_id} não perdeu leads por inatividade no período analisado")
-
-            return leads_perdidos_count
+            except Exception as sql_error:
+                logger.error(f"❌ Erro ao executar SQL direto: {sql_error}")
+                logger.info("🔄 Tentando método fallback...")
+                return self._calculate_leads_perdidos_fallback(broker_id, company_id)
 
         except Exception as e:
-            logger.error(
-                f"❌ ERRO GERAL ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}"
+            logger.error(f"❌ ERRO GERAL no cálculo SLA SQL para broker {broker_id}: {str(e)}")
+            return 0
+
+    def _calculate_leads_perdidos_fallback(self, broker_id, company_id):
+        """
+        Método fallback usando múltiplas queries se o SQL direto falhar.
+        """
+        try:
+            logger.info(f"🔄 Executando método fallback para broker {broker_id}")
+
+            # 1. Buscar etapa "Sem Contato"
+            stages_result = self.client.table("stages_list") \
+                .select("stage_id") \
+                .eq("company_id", company_id) \
+                .ilike("stage_name", "%sem contato%") \
+                .execute()
+
+            if not stages_result.data:
+                logger.warning("⚠️ Etapa 'Sem Contato' não encontrada")
+                return 0
+
+            sem_contato_stage_id = stages_result.data[0]['stage_id']
+            logger.info(f"✅ Etapa 'Sem Contato': {sem_contato_stage_id}")
+
+            # 2. Query para buscar mudanças de responsável com tempo >= 27 min sem mensagem
+            perdas_query = """
+            SELECT DISTINCT a1.lead_id
+            FROM activities a1
+            WHERE a1.company_id = %s
+            AND a1.tipo = 'mudança_responsavel'
+            AND a1.responsavel_anterior = %s
+            AND a1.responsavel_anterior IS NOT NULL
+            AND EXTRACT(EPOCH FROM (a1.criado_em - (
+                SELECT a2.criado_em FROM activities a2
+                WHERE a2.lead_id = a1.lead_id
+                AND a2.tipo = 'mudança_responsavel' 
+                AND a2.responsavel_novo = a1.responsavel_anterior
+                AND a2.criado_em < a1.criado_em
+                ORDER BY a2.criado_em DESC
+                LIMIT 1
+            ))) / 60 >= 27
+            AND NOT EXISTS(
+                SELECT 1 FROM activities a3
+                WHERE a3.lead_id = a1.lead_id
+                AND a3.tipo = 'mensagem_enviada'
+                AND a3.user_id = a1.responsavel_anterior
+                AND a3.criado_em > (
+                    SELECT a4.criado_em FROM activities a4
+                    WHERE a4.lead_id = a1.lead_id
+                    AND a4.tipo = 'mudança_responsavel'
+                    AND a4.responsavel_novo = a1.responsavel_anterior
+                    AND a4.criado_em < a1.criado_em
+                    ORDER BY a4.criado_em DESC
+                    LIMIT 1
+                )
+                AND a3.criado_em < a1.criado_em
             )
-            import traceback
-            logger.error(f"Traceback completo: {traceback.format_exc()}")
+            AND EXISTS(
+                SELECT 1 FROM activities a5
+                WHERE a5.lead_id = a1.lead_id
+                AND a5.tipo = 'mudança_status'
+                AND a5.status_novo = %s
+                AND a5.criado_em <= a1.criado_em
+            )
+            """
+
+            # Executar query de fallback
+            fallback_result = self.client.rpc('exec_sql', {
+                'query': perdas_query,
+                'params': [company_id, broker_id, sem_contato_stage_id]
+            }).execute()
+
+            if hasattr(fallback_result, 'error') and fallback_result.error:
+                logger.error(f"❌ Erro no fallback: {fallback_result.error}")
+                return 0
+
+            leads_perdidos = len(fallback_result.data) if fallback_result.data else 0
+            logger.info(f"✅ Fallback executado: {leads_perdidos} leads perdidos")
+
+            return leads_perdidos
+
+        except Exception as e:
+            logger.error(f"❌ Erro no método fallback: {e}")
             return 0
 
     def _process_lead_sla_state_machine(self, lead_id, lead_activities,
