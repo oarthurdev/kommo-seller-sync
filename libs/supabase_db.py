@@ -1517,9 +1517,6 @@ class SupabaseClient:
                 broker_id = broker['id']
                 broker_name = broker['nome']
 
-                logger.info(
-                    f"Calculando SLA para {broker_name} (ID: {broker_id})")
-
                 perdas_inatividade = self._calculate_leads_perdidos_por_inatividade(
                     broker_id, all_activities, company_id)
 
@@ -2200,12 +2197,10 @@ class SupabaseClient:
             # Converter broker_id para o tipo correto
             broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
 
-            logger.info(f"🔍 Calculando SLA para broker {broker_id}")
-
-            # Usar função RPC otimizada do Supabase
+            # Usar função RPC otimizada do Supabase com conversão de tipos
             response = self.client.rpc('calculate_sla_leads_perdidos', {
-                'p_company_id': company_id,
-                'p_broker_id': broker_id
+                'p_company_id': str(company_id),
+                'p_broker_id': int(broker_id)
             }).execute()
 
             if hasattr(response, 'error') and response.error:
@@ -2213,8 +2208,6 @@ class SupabaseClient:
                 return 0
 
             leads_perdidos_count = response.data if response.data is not None else 0
-            
-            logger.info(f"✅ SLA calculado - Broker {broker_id}: {leads_perdidos_count} leads perdidos")
 
             return leads_perdidos_count
 
