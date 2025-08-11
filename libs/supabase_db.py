@@ -1306,7 +1306,7 @@ class SupabaseClient:
                     try:
                         count = self._calculate_rule_points(
                             rule_name, rule_config, broker_leads,
-                            broker_activities, leads, activities, company_id)
+                            broker_activities, leads, activities, company_id, broker_id)
                         rule_results[rule_name] = count
 
                         points_per_occurrence = rule_config.get(
@@ -1910,7 +1910,7 @@ class SupabaseClient:
 
     def _calculate_rule_points(self, rule_name, rule_config, broker_leads,
                                broker_activities, all_leads, all_activities,
-                               company_id):
+                               company_id, broker_id=None):
         """Calculate count for a specific rule - returns the number of occurrences, not points"""
         try:
             # Ensure datetime columns are properly converted with better error handling
@@ -2055,10 +2055,12 @@ class SupabaseClient:
                     f"All activities shape: {all_activities.shape if not all_activities.empty else 'Empty'}"
                 )
 
-                # Extrair broker_id das atividades do corretor ou dos leads
+                # Extrair broker_id do contexto atual (passado pela função update_broker_points)
+                # Usar o broker_id da iteração atual do loop de brokers
                 current_broker_id = None
                 
-                # Tentar pegar o broker_id das atividades primeiro
+                # O broker_id correto vem do contexto do broker sendo processado
+                # Vamos extrair das atividades do broker ou leads, mas com fallback para o contexto
                 if not broker_activities.empty and 'user_id' in broker_activities.columns:
                     user_ids = broker_activities['user_id'].dropna().unique()
                     if len(user_ids) > 0:
@@ -2072,9 +2074,14 @@ class SupabaseClient:
                         current_broker_id = responsavel_ids[0]
                         logger.debug(f"Broker ID identificado dos leads: {current_broker_id}")
 
+                # Se ainda não conseguiu, usar o broker_id do contexto
                 if current_broker_id is None:
-                    logger.warning("❌ Nenhum broker ID identificado - retornando 0")
-                    return 0
+                    if broker_id is not None:
+                        current_broker_id = broker_id
+                        logger.info(f"✅ Usando broker_id do contexto: {current_broker_id}")
+                    else:
+                        logger.warning("❌ Nenhum broker ID disponível - retornando 0")
+                        return 0
 
                 # Converter para int se necessário
                 try:
