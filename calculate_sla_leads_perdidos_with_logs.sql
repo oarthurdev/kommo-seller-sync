@@ -1,5 +1,5 @@
 
--- Função RPC otimizada para calcular leads perdidos por inatividade COM LOGS DETALHADOS
+-- Função RPC para calcular leads perdidos por inatividade baseado na atribuição de responsável
 CREATE OR REPLACE FUNCTION calculate_sla_leads_perdidos(
     p_company_id TEXT,
     p_broker_id BIGINT
@@ -8,14 +8,13 @@ DECLARE
     v_execution_id UUID := gen_random_uuid();
     v_broker_name TEXT;
     v_leads_perdidos INTEGER := 0;
-    v_total_leads INTEGER := 0;
-    v_total_activities INTEGER := 0;
+    v_total_assignments INTEGER := 0;
     v_start_time TIMESTAMP := clock_timestamp();
-    v_current_lead_id TEXT;
-    v_lead_record RECORD;
+    v_current_lead_id BIGINT;
     v_activity_record RECORD;
-    v_last_client_message TIMESTAMP;
-    v_last_broker_response TIMESTAMP;
+    v_assignment_time TIMESTAMP;
+    v_next_assignment_time TIMESTAMP;
+    v_first_broker_message TIMESTAMP;
     v_time_diff_minutes NUMERIC;
     v_execution_time INTEGER;
 BEGIN
@@ -25,7 +24,7 @@ BEGIN
         additional_data
     ) VALUES (
         p_company_id, p_broker_id, v_execution_id, 'INFO', 'INIT',
-        'Iniciando cálculo SLA para broker ' || p_broker_id,
+        'Iniciando cálculo SLA - leads perdidos por inatividade após atribuição',
         jsonb_build_object('company_id', p_company_id, 'broker_id', p_broker_id)
     );
 
@@ -33,7 +32,7 @@ BEGIN
     BEGIN
         SELECT nome INTO v_broker_name 
         FROM brokers 
-        WHERE id = p_broker_id AND company_id = p_company_id;
+        WHERE id = p_broker_id AND company_id = p_company_id::uuid;
         
         INSERT INTO sla_calculation_logs (
             company_id, broker_id, broker_name, execution_id, log_level, step_name, message
@@ -52,112 +51,125 @@ BEGIN
         );
     END;
 
-    -- Buscar leads do broker com status "Sem Contato" (stage_id = 70766295)
+    -- Buscar atividades de atribuição de responsável para o broker nos últimos 30 dias
     INSERT INTO sla_calculation_logs (
         company_id, broker_id, broker_name, execution_id, log_level, step_name, message
     ) VALUES (
-        p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'FETCH_LEADS',
-        'Buscando leads com status "Sem Contato" para o broker'
+        p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'FETCH_ASSIGNMENTS',
+        'Buscando atribuições de responsável para o broker nos últimos 30 dias'
     );
 
-    SELECT COUNT(*) INTO v_total_leads
-    FROM leads 
-    WHERE responsavel_id = p_broker_id 
-      AND company_id = p_company_id 
-      AND status_id = 70766295;
+    SELECT COUNT(*) INTO v_total_assignments
+    FROM activities 
+    WHERE company_id = p_company_id::uuid
+      AND tipo = 'mudança_responsavel'
+      AND responsavel_novo = p_broker_id
+      AND criado_em >= (NOW() - INTERVAL '30 days');
 
     INSERT INTO sla_calculation_logs (
         company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
         leads_processed, additional_data
     ) VALUES (
-        p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'LEADS_COUNT',
-        'Total de leads "Sem Contato" encontrados: ' || v_total_leads,
-        v_total_leads,
-        jsonb_build_object('status_id', 70766295, 'total_leads', v_total_leads)
+        p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'ASSIGNMENTS_COUNT',
+        'Total de atribuições encontradas: ' || v_total_assignments,
+        v_total_assignments,
+        jsonb_build_object('total_assignments', v_total_assignments, 'period_days', 30)
     );
 
-    -- Se não há leads, retornar zero
-    IF v_total_leads = 0 THEN
+    -- Se não há atribuições, retornar zero
+    IF v_total_assignments = 0 THEN
         INSERT INTO sla_calculation_logs (
             company_id, broker_id, broker_name, execution_id, log_level, step_name, message
         ) VALUES (
-            p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'NO_LEADS',
-            'Nenhum lead "Sem Contato" encontrado - retornando 0'
+            p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'NO_ASSIGNMENTS',
+            'Nenhuma atribuição encontrada - retornando 0'
         );
         
         RETURN 0;
     END IF;
 
-    -- Loop através dos leads para verificar SLA
-    FOR v_lead_record IN 
-        SELECT id, nome, criado_em
-        FROM leads 
-        WHERE responsavel_id = p_broker_id 
-          AND company_id = p_company_id 
-          AND status_id = 70766295
+    -- Loop através das atribuições para verificar SLA
+    FOR v_activity_record IN 
+        SELECT lead_id, criado_em, responsavel_anterior
+        FROM activities 
+        WHERE company_id = p_company_id::uuid
+          AND tipo = 'mudança_responsavel'
+          AND responsavel_novo = p_broker_id
+          AND criado_em >= (NOW() - INTERVAL '30 days')
         ORDER BY criado_em DESC
-        LIMIT 100 -- Limitar para performance
+        LIMIT 200 -- Limitar para performance
     LOOP
-        v_current_lead_id := v_lead_record.id;
+        v_current_lead_id := v_activity_record.lead_id;
+        v_assignment_time := v_activity_record.criado_em;
         
         INSERT INTO sla_calculation_logs (
             company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
             current_lead_id, additional_data
         ) VALUES (
-            p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'PROCESS_LEAD',
-            'Processando lead: ' || COALESCE(v_lead_record.nome, 'Nome não disponível'),
-            v_current_lead_id,
-            jsonb_build_object('lead_id', v_current_lead_id, 'lead_criado_em', v_lead_record.criado_em)
-        );
-
-        -- Buscar última mensagem do cliente (webhook incoming)
-        SELECT MAX(inserted_at) INTO v_last_client_message
-        FROM from_webhook
-        WHERE lead_id = v_current_lead_id
-          AND message_type = 'incoming'
-          AND created_at >= (NOW() - INTERVAL '30 days');
-
-        -- Buscar última resposta do broker (webhook outgoing)
-        SELECT MAX(inserted_at) INTO v_last_broker_response
-        FROM from_webhook
-        WHERE lead_id = v_current_lead_id
-          AND broker_id = p_broker_id::TEXT
-          AND message_type = 'outgoing'
-          AND created_at >= (NOW() - INTERVAL '30 days');
-
-        INSERT INTO sla_calculation_logs (
-            company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
-            current_lead_id, additional_data
-        ) VALUES (
-            p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'MESSAGE_TIMES',
-            'Timestamps encontrados para lead ' || v_current_lead_id,
-            v_current_lead_id,
+            p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'PROCESS_ASSIGNMENT',
+            'Processando atribuição do lead ' || v_current_lead_id || ' em ' || v_assignment_time,
+            v_current_lead_id::text,
             jsonb_build_object(
-                'last_client_message', v_last_client_message,
-                'last_broker_response', v_last_broker_response
+                'lead_id', v_current_lead_id, 
+                'assignment_time', v_assignment_time,
+                'responsavel_anterior', v_activity_record.responsavel_anterior
             )
         );
 
-        -- Verificar SLA: se há mensagem do cliente sem resposta há mais de 27 minutos
-        IF v_last_client_message IS NOT NULL THEN
-            IF v_last_broker_response IS NULL OR v_last_client_message > v_last_broker_response THEN
-                v_time_diff_minutes := EXTRACT(EPOCH FROM (NOW() - v_last_client_message)) / 60;
+        -- Buscar próxima mudança de responsável deste lead (indicando que o broker perdeu o lead)
+        SELECT MIN(criado_em) INTO v_next_assignment_time
+        FROM activities
+        WHERE company_id = p_company_id::uuid
+          AND lead_id = v_current_lead_id
+          AND tipo = 'mudança_responsavel'
+          AND responsavel_anterior = p_broker_id
+          AND criado_em > v_assignment_time;
+
+        -- Se houve mudança de responsável, verificar se foi por inatividade
+        IF v_next_assignment_time IS NOT NULL THEN
+            -- Buscar primeira mensagem do broker após ser atribuído (webhook outgoing)
+            SELECT MIN(inserted_at) INTO v_first_broker_message
+            FROM from_webhook
+            WHERE lead_id = v_current_lead_id
+              AND broker_id = p_broker_id::text
+              AND message_type = 'outgoing'
+              AND inserted_at >= v_assignment_time
+              AND inserted_at < v_next_assignment_time;
+
+            INSERT INTO sla_calculation_logs (
+                company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
+                current_lead_id, additional_data
+            ) VALUES (
+                p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'MESSAGE_CHECK',
+                'Verificando mensagens entre ' || v_assignment_time || ' e ' || v_next_assignment_time,
+                v_current_lead_id::text,
+                jsonb_build_object(
+                    'assignment_time', v_assignment_time,
+                    'next_assignment_time', v_next_assignment_time,
+                    'first_broker_message', v_first_broker_message
+                )
+            );
+
+            -- Se não enviou mensagem, calcular tempo até a troca de responsável
+            IF v_first_broker_message IS NULL THEN
+                v_time_diff_minutes := EXTRACT(EPOCH FROM (v_next_assignment_time - v_assignment_time)) / 60;
                 
                 INSERT INTO sla_calculation_logs (
                     company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
                     current_lead_id, time_threshold_minutes, additional_data
                 ) VALUES (
-                    p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'SLA_CHECK',
-                    'Verificando SLA - Tempo sem resposta: ' || ROUND(v_time_diff_minutes, 2) || ' minutos',
-                    v_current_lead_id, 27,
+                    p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'INACTIVITY_CHECK',
+                    'Sem mensagem enviada - Tempo até troca: ' || ROUND(v_time_diff_minutes, 2) || ' minutos',
+                    v_current_lead_id::text, 27,
                     jsonb_build_object(
                         'time_diff_minutes', v_time_diff_minutes,
                         'threshold', 27,
-                        'sla_violated', v_time_diff_minutes > 27
+                        'sla_violated', v_time_diff_minutes >= 27
                     )
                 );
 
-                IF v_time_diff_minutes > 27 THEN
+                -- Se passou de 27 minutos sem enviar mensagem, contabilizar como lead perdido
+                IF v_time_diff_minutes >= 27 THEN
                     v_leads_perdidos := v_leads_perdidos + 1;
                     
                     INSERT INTO sla_calculation_logs (
@@ -165,8 +177,8 @@ BEGIN
                         current_lead_id, time_threshold_minutes, additional_data
                     ) VALUES (
                         p_company_id, p_broker_id, v_broker_name, v_execution_id, 'WARNING', 'SLA_VIOLATION',
-                        'SLA VIOLADO! Lead perdido por inatividade - ' || ROUND(v_time_diff_minutes, 2) || ' min sem resposta',
-                        v_current_lead_id, 27,
+                        'LEAD PERDIDO! ' || ROUND(v_time_diff_minutes, 2) || ' min sem resposta após atribuição',
+                        v_current_lead_id::text, 27,
                         jsonb_build_object(
                             'time_diff_minutes', v_time_diff_minutes,
                             'leads_perdidos_count', v_leads_perdidos
@@ -174,23 +186,57 @@ BEGIN
                     );
                 END IF;
             ELSE
+                -- Verificar se a primeira mensagem foi enviada dentro de 27 minutos
+                v_time_diff_minutes := EXTRACT(EPOCH FROM (v_first_broker_message - v_assignment_time)) / 60;
+                
                 INSERT INTO sla_calculation_logs (
                     company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
-                    current_lead_id
+                    current_lead_id, additional_data
                 ) VALUES (
-                    p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'SLA_OK',
-                    'SLA OK - Broker respondeu após última mensagem do cliente',
-                    v_current_lead_id
+                    p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'MESSAGE_TIMING',
+                    'Primeira mensagem enviada após ' || ROUND(v_time_diff_minutes, 2) || ' minutos da atribuição',
+                    v_current_lead_id::text,
+                    jsonb_build_object(
+                        'response_time_minutes', v_time_diff_minutes,
+                        'within_sla', v_time_diff_minutes < 27
+                    )
                 );
+
+                -- Se a primeira mensagem foi após 27 minutos, ainda assim perdeu o lead
+                IF v_time_diff_minutes >= 27 THEN
+                    v_leads_perdidos := v_leads_perdidos + 1;
+                    
+                    INSERT INTO sla_calculation_logs (
+                        company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
+                        current_lead_id, time_threshold_minutes, additional_data
+                    ) VALUES (
+                        p_company_id, p_broker_id, v_broker_name, v_execution_id, 'WARNING', 'SLA_VIOLATION',
+                        'LEAD PERDIDO! Primeira mensagem após ' || ROUND(v_time_diff_minutes, 2) || ' min (SLA = 27min)',
+                        v_current_lead_id::text, 27,
+                        jsonb_build_object(
+                            'response_time_minutes', v_time_diff_minutes,
+                            'leads_perdidos_count', v_leads_perdidos
+                        )
+                    );
+                ELSE
+                    INSERT INTO sla_calculation_logs (
+                        company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
+                        current_lead_id
+                    ) VALUES (
+                        p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'SLA_OK_BUT_LOST',
+                        'Respondeu dentro do prazo mas ainda assim perdeu o lead (outros motivos)',
+                        v_current_lead_id::text
+                    );
+                END IF;
             END IF;
         ELSE
             INSERT INTO sla_calculation_logs (
                 company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
                 current_lead_id
             ) VALUES (
-                p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'NO_CLIENT_MESSAGE',
-                'Nenhuma mensagem do cliente encontrada nos últimos 30 dias',
-                v_current_lead_id
+                p_company_id, p_broker_id, v_broker_name, v_execution_id, 'DEBUG', 'STILL_RESPONSIBLE',
+                'Broker ainda é responsável por este lead',
+                v_current_lead_id::text
             );
         END IF;
 
@@ -205,11 +251,11 @@ BEGIN
         leads_processed, execution_time_ms, additional_data
     ) VALUES (
         p_company_id, p_broker_id, v_broker_name, v_execution_id, 'INFO', 'RESULT',
-        'Cálculo SLA finalizado - ' || v_leads_perdidos || ' leads perdidos de ' || v_total_leads || ' analisados',
-        v_total_leads, v_execution_time,
+        'Cálculo SLA finalizado - ' || v_leads_perdidos || ' leads perdidos de ' || v_total_assignments || ' atribuições',
+        v_total_assignments, v_execution_time,
         jsonb_build_object(
             'leads_perdidos', v_leads_perdidos,
-            'total_leads', v_total_leads,
+            'total_assignments', v_total_assignments,
             'execution_time_ms', v_execution_time,
             'success', true
         )
@@ -238,4 +284,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Comentário da função
-COMMENT ON FUNCTION calculate_sla_leads_perdidos IS 'Calcula leads perdidos por inatividade (>27min sem resposta) com logging detalhado';
+COMMENT ON FUNCTION calculate_sla_leads_perdidos IS 'Calcula leads perdidos por inatividade baseado no fluxo: atribuição → 27min sem resposta → troca de responsável';
