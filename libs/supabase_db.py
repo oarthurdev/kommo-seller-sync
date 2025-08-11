@@ -2165,12 +2165,13 @@ class SupabaseClient:
     def _calculate_leads_perdidos_por_inatividade(self, broker_id,
                                                   all_activities, company_id):
         """
-        Calcula leads perdidos por inatividade.
+        Calcula leads perdidos por inatividade seguindo o fluxo correto:
 
-        Regra:
-        1. Buscar etapa "Sem Contato" na tabela stages_list
-        2. Buscar todos os leads do broker que estão na etapa "Sem Contato"
-        3. Para cada lead, verificar se após 27 minutos da criação não houve mensagem enviada
+        1. Lead é criado na etapa "Sem Contato" com responsavel_id = 0
+        2. Responsável é definido via atividade mudança_responsavel (responsavel_novo)
+        3. Verifica se esse responsável enviou mensagem em 27 minutos
+        4. Se não enviou, há mudança_responsavel (responsavel_anterior = quem perdeu)
+        5. Processo continua até alguém enviar mensagem
 
         Args:
             broker_id: ID do corretor
@@ -2212,31 +2213,42 @@ class SupabaseClient:
                 logger.error(f"Erro ao buscar etapa 'Sem Contato': {e}")
                 return 0
 
-            # Buscar leads do broker que estão na etapa "Sem Contato"
+            # Buscar todos os leads criados na etapa "Sem Contato"
+            # (não filtrar por responsavel_id pois inicialmente é 0)
             try:
-                leads_sem_contato_result = self.client.table("leads").select("id, criado_em") \
-                    .eq("responsavel_id", broker_id) \
+                leads_sem_contato_result = self.client.table("leads").select("id, criado_em, responsavel_id") \
                     .eq("status_id", sem_contato_stage_id) \
                     .eq("company_id", company_id).execute()
 
                 if not leads_sem_contato_result.data:
                     logger.debug(
-                        f"Broker {broker_id}: Nenhum lead na etapa 'Sem Contato'"
+                        f"Nenhum lead encontrado na etapa 'Sem Contato'"
                     )
                     return 0
 
                 leads_sem_contato = leads_sem_contato_result.data
                 logger.debug(
-                    f"Broker {broker_id}: {len(leads_sem_contato)} leads na etapa 'Sem Contato'"
+                    f"Encontrados {len(leads_sem_contato)} leads na etapa 'Sem Contato'"
                 )
 
             except Exception as e:
                 logger.error(f"Erro ao buscar leads em 'Sem Contato': {e}")
                 return 0
 
+            if all_activities.empty:
+                logger.warning("DataFrame de atividades está vazio")
+                return 0
+
+            # Converter colunas de data para datetime
+            all_activities = all_activities.copy()
+            if 'criado_em' in all_activities.columns:
+                all_activities['criado_em'] = pd.to_datetime(
+                    all_activities['criado_em'], errors='coerce', utc=True)
+
             leads_perdidos_count = 0
             from datetime import datetime, timezone, timedelta
 
+            # Processar cada lead individualmente
             for lead in leads_sem_contato:
                 lead_id = lead['id']
                 criado_em = lead['criado_em']
@@ -2244,7 +2256,7 @@ class SupabaseClient:
                 if not criado_em:
                     continue
 
-                # Converter criado_em para datetime se necessário
+                # Converter criado_em para datetime
                 if isinstance(criado_em, str):
                     try:
                         criado_em = pd.to_datetime(criado_em, utc=True)
@@ -2254,51 +2266,27 @@ class SupabaseClient:
                         )
                         continue
 
-                # Calcular tempo limite (27 minutos após criação)
-                tempo_limite = criado_em + timedelta(minutes=27)
-                agora = datetime.now(timezone.utc)
+                logger.debug(f"\n--- Processando Lead {lead_id} ---")
 
-                # Se ainda não passou 27 minutos, pular
-                if agora < tempo_limite:
-                    logger.debug(
-                        f"Lead {lead_id}: Ainda dentro do prazo de 27 minutos")
+                # Buscar todas as atividades deste lead, ordenadas por data
+                lead_activities = all_activities[
+                    all_activities['lead_id'] == lead_id
+                ].sort_values('criado_em').copy()
+
+                if lead_activities.empty:
+                    logger.debug(f"Lead {lead_id}: Sem atividades")
                     continue
 
-                # Verificar se houve mensagem enviada pelo broker neste lead
-                try:
-                    if not all_activities.empty:
-                        # Filtrar atividades de mensagem enviada pelo broker para este lead
-                        mensagens_broker = all_activities[
-                            (all_activities['lead_id'] == lead_id)
-                            & (all_activities['user_id'] == broker_id) &
-                            (all_activities['tipo'] == 'mensagem_enviada')]
-
-                        if mensagens_broker.empty:
-                            # Não houve mensagem enviada - conta como perda
-                            leads_perdidos_count += 1
-                            logger.debug(
-                                f"Lead {lead_id}: SLA VIOLADO - {(agora - criado_em).total_seconds() / 60:.1f} min sem mensagem"
-                            )
-                        else:
-                            logger.debug(
-                                f"Lead {lead_id}: Teve mensagem enviada - SLA OK"
-                            )
-                    else:
-                        # Sem atividades, considera como perda
-                        leads_perdidos_count += 1
-                        logger.debug(
-                            f"Lead {lead_id}: Sem atividades - conta como perda"
-                        )
-
-                except Exception as e:
-                    logger.warning(
-                        f"Erro ao verificar mensagens do lead {lead_id}: {e}")
-                    continue
+                # Processar o fluxo de responsabilidade deste lead
+                perdas_lead = self._process_lead_responsibility_flow(
+                    lead_id, lead_activities, criado_em, broker_id, sem_contato_stage_id
+                )
+                
+                leads_perdidos_count += perdas_lead
 
             logger.info(
                 f"🎯 RESULTADO FINAL - Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade"
             )
-            logger.info(f"🔄 RETORNANDO valor: {leads_perdidos_count}")
             return leads_perdidos_count
 
         except Exception as e:
@@ -2307,6 +2295,101 @@ class SupabaseClient:
             )
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
+            return 0
+
+    def _process_lead_responsibility_flow(self, lead_id, lead_activities, lead_created_at, target_broker_id, sem_contato_stage_id):
+        """
+        Processa o fluxo de responsabilidade de um lead específico.
+        
+        Returns:
+            int: 1 se o target_broker_id perdeu este lead, 0 caso contrário
+        """
+        try:
+            from datetime import timedelta
+            
+            logger.debug(f"  Processando fluxo do lead {lead_id}")
+            
+            current_responsible = None
+            responsibility_start_time = None
+            perdeu_lead = 0
+            
+            # Processar cada atividade do lead em ordem cronológica
+            for _, activity in lead_activities.iterrows():
+                activity_time = activity['criado_em']
+                activity_type = activity.get('tipo', '')
+                user_id = activity.get('user_id')
+                
+                logger.debug(f"    {activity_time}: {activity_type} (user: {user_id})")
+                
+                # Evento 1: Mudança de responsável (responsavel_novo recebe o lead)
+                if activity_type == 'mudança_responsavel':
+                    responsavel_anterior = activity.get('responsavel_anterior')
+                    responsavel_novo = activity.get('responsavel_novo')
+                    
+                    logger.debug(f"      Mudança: {responsavel_anterior} → {responsavel_novo}")
+                    
+                    # Se havia um responsável anterior, verificar se perdeu por tempo
+                    if (current_responsible is not None and 
+                        responsibility_start_time is not None and
+                        responsavel_anterior == current_responsible):
+                        
+                        time_diff = (activity_time - responsibility_start_time).total_seconds() / 60
+                        logger.debug(f"      Tempo de responsabilidade: {time_diff:.1f} min")
+                        
+                        if time_diff >= 27:
+                            # SLA violado - contar perda se for o broker alvo
+                            if current_responsible == target_broker_id:
+                                perdeu_lead = 1
+                                logger.debug(f"      ❌ PERDA! Broker {target_broker_id} perdeu lead {lead_id} após {time_diff:.1f} min")
+                            else:
+                                logger.debug(f"      Perda de outro broker ({current_responsible}), não conta para {target_broker_id}")
+                    
+                    # Novo responsável assume o lead
+                    if responsavel_novo and responsavel_novo != 0:
+                        current_responsible = int(responsavel_novo)
+                        responsibility_start_time = activity_time
+                        logger.debug(f"      Novo responsável: {current_responsible} (início: {activity_time})")
+                
+                # Evento 2: Mensagem enviada pelo responsável atual (salva o SLA)
+                elif (activity_type == 'mensagem_enviada' and 
+                      current_responsible is not None and 
+                      user_id == current_responsible):
+                    
+                    if responsibility_start_time:
+                        time_diff = (activity_time - responsibility_start_time).total_seconds() / 60
+                        logger.debug(f"      ✅ MENSAGEM! Responsável {user_id} respondeu em {time_diff:.1f} min")
+                        logger.debug(f"      SLA cumprido - lead não será perdido")
+                        
+                        # Lead foi salvo, parar o processamento
+                        return perdeu_lead
+                
+                # Evento 3: Mudança de status para fora de "Sem Contato"
+                elif (activity_type == 'mudança_status' and
+                      activity.get('status_anterior') == sem_contato_stage_id and
+                      activity.get('status_novo') != sem_contato_stage_id):
+                    
+                    logger.debug(f"      Lead saiu de 'Sem Contato' - encerrando SLA")
+                    break
+            
+            # Verificar se ainda há responsável ativo no final (sem resolução)
+            if (current_responsible == target_broker_id and 
+                responsibility_start_time is not None):
+                
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                time_diff = (now - responsibility_start_time).total_seconds() / 60
+                
+                if time_diff >= 27:
+                    logger.debug(f"      ⏰ TIMEOUT! Broker {target_broker_id} ainda responsável há {time_diff:.1f} min")
+                    # Consideramos como perda se passou muito tempo sem ação
+                    # (ajustar conforme regra de negócio)
+                    perdeu_lead = 1
+            
+            logger.debug(f"  Lead {lead_id}: Resultado = {perdeu_lead}")
+            return perdeu_lead
+            
+        except Exception as e:
+            logger.error(f"Erro processando fluxo do lead {lead_id}: {e}")
             return 0
 
     def _process_lead_sla_state_machine(self, lead_id, lead_activities,
