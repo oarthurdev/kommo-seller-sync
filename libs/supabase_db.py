@@ -460,9 +460,8 @@ class SupabaseClient:
                     # Only convert finite values (NaN/None will be handled separately)
                     mask = np.isfinite(leads_df_clean[col])
                     if mask.any():
-                        leads_df_clean.loc[mask,
-                                           col] = leads_df_clean.loc[mask, col].astype(
-                                               'Int64')
+                        leads_df_clean.loc[mask, col] = leads_df_clean.loc[
+                            mask, col].astype('Int64')
 
             # The 'id' column in leads table is of type TEXT in SQL, but Kommo API might return it as a number
             # We need to ensure it's converted to string
@@ -471,7 +470,8 @@ class SupabaseClient:
 
             # Convert datetime columns to ISO format
             datetime_columns = [
-                'criado_em', 'atualizado_em', 'data_contato', 'data_criacao_amocrm'
+                'criado_em', 'atualizado_em', 'data_contato',
+                'data_criacao_amocrm'
             ]
             for col in datetime_columns:
                 if col in leads_df_clean.columns:
@@ -491,7 +491,9 @@ class SupabaseClient:
             if hasattr(result, "error") and result.error:
                 raise Exception(f"Supabase error: {result.error}")
 
-            logger.info(f"Leads upserted successfully: {len(leads_data)} records processed")
+            logger.info(
+                f"Leads upserted successfully: {len(leads_data)} records processed"
+            )
             return result
 
         except Exception as e:
@@ -571,7 +573,8 @@ class SupabaseClient:
                     "id").execute()
                 if hasattr(brokers_result, "error") and brokers_result.error:
                     raise Exception(
-                        f"Supabase error querying brokers: {brokers_result.error}")
+                        f"Supabase error querying brokers: {brokers_result.error}"
+                    )
 
                 # Create a set of existing broker IDs for faster lookup
                 existing_broker_ids = set()
@@ -1306,7 +1309,8 @@ class SupabaseClient:
                     try:
                         count = self._calculate_rule_points(
                             rule_name, rule_config, broker_leads,
-                            broker_activities, leads, activities, company_id, broker_id)
+                            broker_activities, leads, activities, company_id,
+                            broker_id)
                         rule_results[rule_name] = count
 
                         points_per_occurrence = rule_config.get(
@@ -1347,16 +1351,26 @@ class SupabaseClient:
                     if rule_name in schema_field_mapping:
                         field_name = schema_field_mapping[rule_name]
                         broker_points_data[field_name] = count
-                        logger.info(f"  - Mapped {rule_name}: {count} → broker_points.{field_name}")
+                        logger.info(
+                            f"  - Mapped {rule_name}: {count} → broker_points.{field_name}"
+                        )
 
                         # Log específico para leads_perdidos para debug
                         if rule_name == 'leads_perdidos':
-                            logger.info(f"  - 🔥 MAPEANDO leads_perdidos: {count} para broker {broker_name}")
-                            logger.info(f"  - 📋 Valor {count} será salvo na coluna {field_name} da tabela broker_points")
-                            logger.info(f"  - 🎯 broker_points_data['{field_name}'] = {broker_points_data[field_name]}")
+                            logger.info(
+                                f"  - 🔥 MAPEANDO leads_perdidos: {count} para broker {broker_name}"
+                            )
+                            logger.info(
+                                f"  - 📋 Valor {count} será salvo na coluna {field_name} da tabela broker_points"
+                            )
+                            logger.info(
+                                f"  - 🎯 broker_points_data['{field_name}'] = {broker_points_data[field_name]}"
+                            )
 
                 # Debug final: mostrar todos os dados que serão salvos
-                logger.info(f"📊 broker_points_data FINAL para {broker_name}: {broker_points_data}")
+                logger.info(
+                    f"📊 broker_points_data FINAL para {broker_name}: {broker_points_data}"
+                )
 
                 try:
                     existing_check = self.client.table("broker_points").select(
@@ -1384,8 +1398,10 @@ class SupabaseClient:
                         if update_data:
                             # Log especial para leads_perdidos
                             if 'leads_perdidos' in update_data:
-                                logger.info(f"🔥 ATUALIZANDO leads_perdidos para {broker_name}: {update_data['leads_perdidos']}")
-                            
+                                logger.info(
+                                    f"🔥 ATUALIZANDO leads_perdidos para {broker_name}: {update_data['leads_perdidos']}"
+                                )
+
                             result = self.client.table("broker_points").update(
                                 update_data).eq("id", broker_id).eq(
                                     "company_id", company_id).execute()
@@ -1399,10 +1415,12 @@ class SupabaseClient:
                             logger.info(
                                 f"Updated {len(update_data)} fields for {broker_name}: {total_points} total points"
                             )
-                            
+
                             # Verificação adicional para leads_perdidos
                             if 'leads_perdidos' in update_data:
-                                logger.info(f"✅ leads_perdidos atualizado com sucesso: {update_data['leads_perdidos']}")
+                                logger.info(
+                                    f"✅ leads_perdidos atualizado com sucesso: {update_data['leads_perdidos']}"
+                                )
                         else:
                             logger.info(
                                 f"No changes detected for {broker_name} - skipping update"
@@ -1410,8 +1428,10 @@ class SupabaseClient:
                     else:
                         # Log especial para leads_perdidos na inserção
                         if broker_points_data.get('leads_perdidos', 0) > 0:
-                            logger.info(f"🔥 INSERINDO leads_perdidos para {broker_name}: {broker_points_data['leads_perdidos']}")
-                        
+                            logger.info(
+                                f"🔥 INSERINDO leads_perdidos para {broker_name}: {broker_points_data['leads_perdidos']}"
+                            )
+
                         result = self.client.table("broker_points").insert(
                             broker_points_data).execute()
 
@@ -1424,10 +1444,12 @@ class SupabaseClient:
                         logger.info(
                             f"Inserted new record for {broker_name}: {total_points} total points"
                         )
-                        
+
                         # Verificação adicional para leads_perdidos na inserção
                         if broker_points_data.get('leads_perdidos', 0) > 0:
-                            logger.info(f"✅ leads_perdidos inserido com sucesso: {broker_points_data['leads_perdidos']}")
+                            logger.info(
+                                f"✅ leads_perdidos inserido com sucesso: {broker_points_data['leads_perdidos']}"
+                            )
 
                 except Exception as db_error:
                     logger.error(
@@ -1551,7 +1573,7 @@ class SupabaseClient:
                     'calculated_at':
                     current_time,
                     'period_start':
-                    datetime.now().replace(day=1).isoformat(), # Início do mês
+                    datetime.now().replace(day=1).isoformat(),  # Início do mês
                     'period_end':
                     current_time
                 })
@@ -1596,7 +1618,8 @@ class SupabaseClient:
             logger.error(f"Erro ao salvar métricas SLA: {e}")
 
             # Note: SLA metrics are now integrated into broker_points calculation
-            logger.info("SLA metrics integrated into broker points calculation")
+            logger.info(
+                "SLA metrics integrated into broker points calculation")
 
     def setup_company_rules(self, company_id, default_rules=None):
         """
@@ -1908,9 +1931,15 @@ class SupabaseClient:
                 f"Error calculating dynamic metrics for company {company_id}: {str(e)}"
             )
 
-    def _calculate_rule_points(self, rule_name, rule_config, broker_leads,
-                               broker_activities, all_leads, all_activities,
-                               company_id, broker_id=None):
+    def _calculate_rule_points(self,
+                               rule_name,
+                               rule_config,
+                               broker_leads,
+                               broker_activities,
+                               all_leads,
+                               all_activities,
+                               company_id,
+                               broker_id=None):
         """Calculate count for a specific rule - returns the number of occurrences, not points"""
         try:
             # Ensure datetime columns are properly converted with better error handling
@@ -2048,48 +2077,67 @@ class SupabaseClient:
                 logger.info(
                     f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para rule_name: {rule_name}"
                 )
-                logger.info(f"⚠️ AVISO: broker_activities e all_activities são IGNORADOS")
-                logger.info(f"⚠️ A função fará suas próprias consultas isoladas no banco")
-                
+                logger.info(
+                    f"⚠️ AVISO: broker_activities e all_activities são IGNORADOS"
+                )
+                logger.info(
+                    f"⚠️ A função fará suas próprias consultas isoladas no banco"
+                )
+
                 # Usar sempre o broker_id do contexto (mais confiável)
                 current_broker_id = broker_id
-                
+
                 # Fallback apenas se broker_id for None
                 if current_broker_id is None:
                     # Tentar extrair das atividades do broker
                     if not broker_activities.empty and 'user_id' in broker_activities.columns:
-                        user_ids = broker_activities['user_id'].dropna().unique()
+                        user_ids = broker_activities['user_id'].dropna(
+                        ).unique()
                         if len(user_ids) > 0:
                             current_broker_id = user_ids[0]
-                            logger.debug(f"Broker ID identificado das atividades (fallback): {current_broker_id}")
-                    
+                            logger.debug(
+                                f"Broker ID identificado das atividades (fallback): {current_broker_id}"
+                            )
+
                     # Tentar extrair dos leads
                     elif not broker_leads.empty and 'responsavel_id' in broker_leads.columns:
-                        responsavel_ids = broker_leads['responsavel_id'].dropna().unique()
+                        responsavel_ids = broker_leads[
+                            'responsavel_id'].dropna().unique()
                         if len(responsavel_ids) > 0:
                             current_broker_id = responsavel_ids[0]
-                            logger.debug(f"Broker ID identificado dos leads (fallback): {current_broker_id}")
+                            logger.debug(
+                                f"Broker ID identificado dos leads (fallback): {current_broker_id}"
+                            )
 
                 if current_broker_id is None:
-                    logger.error("❌ Nenhum broker ID disponível - retornando 0")
+                    logger.error(
+                        "❌ Nenhum broker ID disponível - retornando 0")
                     return 0
 
                 # Converter para int se necessário
                 try:
-                    current_broker_id = int(current_broker_id) if isinstance(current_broker_id, (str, float)) else current_broker_id
+                    current_broker_id = int(current_broker_id) if isinstance(
+                        current_broker_id, (str, float)) else current_broker_id
                 except (ValueError, TypeError):
-                    logger.error(f"Erro ao converter broker_id {current_broker_id} para int")
+                    logger.error(
+                        f"Erro ao converter broker_id {current_broker_id} para int"
+                    )
                     return 0
 
-                logger.info(f"🎯 Usando broker_id: {current_broker_id} (consultas isoladas)")
+                logger.info(
+                    f"🎯 Usando broker_id: {current_broker_id} (consultas isoladas)"
+                )
 
                 # FUNÇÃO COMPLETAMENTE ISOLADA - ignora parâmetros de DataFrames
                 result = self._calculate_leads_perdidos_por_inatividade(
-                    current_broker_id, None, company_id)  # None indica que será ignorado
+                    current_broker_id, None,
+                    company_id)  # None indica que será ignorado
 
-                logger.info(f"🔥 LEADS_PERDIDOS calculado para broker {current_broker_id}: {result}")
+                logger.info(
+                    f"🔥 LEADS_PERDIDOS calculado para broker {current_broker_id}: {result}"
+                )
                 logger.info(f"🏁 RESULTADO FINAL LEADS_PERDIDOS: {result}")
-                
+
                 return result
 
             elif rule_name == "leads_descartados":
@@ -2188,30 +2236,43 @@ class SupabaseClient:
                 return 0
 
             # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
+            broker_id = int(broker_id) if isinstance(broker_id,
+                                                     (str,
+                                                      float)) else broker_id
 
-            logger.info(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} - CONSULTAS ISOLADAS ===")
+            logger.info(
+                f"\n=== CALCULANDO SLA PARA BROKER {broker_id} - CONSULTAS ISOLADAS ==="
+            )
 
             # 1. BUSCAR ETAPA "SEM CONTATO" - CONSULTA DIRETA E ISOLADA
             sem_contato_stage_id = None
             try:
                 logger.debug("🔍 Buscando etapa 'Sem Contato' no banco...")
-                logger.info(f"🔧 SQL QUERY 1 - Buscando etapa 'Sem Contato': SELECT stage_id, stage_name FROM stages_list WHERE company_id = '{company_id}' AND stage_name ILIKE '%sem contato%'")
-                
+                logger.info(
+                    f"🔧 SQL QUERY 1 - Buscando etapa 'Sem Contato': SELECT stage_id, stage_name FROM stages_list WHERE company_id = '{company_id}' AND stage_name ILIKE '%sem contato%'"
+                )
+
                 stages_query = self.client.table("stages_list").select("stage_id, stage_name") \
                     .eq("company_id", company_id) \
                     .ilike("stage_name", "%sem contato%")
-                
+
                 stages_result = stages_query.execute()
-                
+
                 if not stages_result.data:
-                    logger.warning("⚠️ Etapa 'Sem Contato' não encontrada na empresa")
-                    logger.info(f"🔧 RESULTADO SQL QUERY 1: Nenhum resultado encontrado")
+                    logger.warning(
+                        "⚠️ Etapa 'Sem Contato' não encontrada na empresa")
+                    logger.info(
+                        f"🔧 RESULTADO SQL QUERY 1: Nenhum resultado encontrado"
+                    )
                     return 0
-                
+
                 sem_contato_stage_id = stages_result.data[0]['stage_id']
-                logger.info(f"✅ Etapa 'Sem Contato' encontrada: ID {sem_contato_stage_id}")
-                logger.info(f"🔧 RESULTADO SQL QUERY 1: Encontrados {len(stages_result.data)} registros, usando stage_id = {sem_contato_stage_id}")
+                logger.info(
+                    f"✅ Etapa 'Sem Contato' encontrada: ID {sem_contato_stage_id}"
+                )
+                logger.info(
+                    f"🔧 RESULTADO SQL QUERY 1: Encontrados {len(stages_result.data)} registros, usando stage_id = {sem_contato_stage_id}"
+                )
 
             except Exception as e:
                 logger.error(f"❌ Erro ao buscar etapa 'Sem Contato': {e}")
@@ -2220,71 +2281,46 @@ class SupabaseClient:
             # 2. BUSCAR TODOS OS LEADS DA EMPRESA QUE PASSARAM PELA ETAPA "SEM CONTATO" - CONSULTA DIRETA E FILTRADA
             all_leads_data = []
             try:
-                logger.debug("🔍 Buscando leads que passaram pela etapa 'Sem Contato' no banco...")
-                logger.info(f"🔧 SQL QUERY 2 - Buscando leads com filtro: SELECT id, responsavel_id, status_id, criado_em, atualizado_em FROM leads WHERE company_id = '{company_id}' AND status_id = {sem_contato_stage_id}")
-                
+                logger.debug(
+                    "🔍 Buscando leads que passaram pela etapa 'Sem Contato' no banco..."
+                )
+                logger.info(
+                    f"🔧 SQL QUERY 2 - Buscando leads com filtro: SELECT id, responsavel_id, status_id, criado_em, atualizado_em FROM leads WHERE company_id = '{company_id}' AND status_id = {sem_contato_stage_id}"
+                )
+
                 # Buscar leads que estão atualmente na etapa "Sem Contato"
                 leads_query = self.client.table("leads").select("id, responsavel_id, status_id, criado_em, atualizado_em") \
                     .eq("company_id", company_id) \
                     .eq("status_id", sem_contato_stage_id)
-                
+
                 leads_result = leads_query.execute()
-                
+
                 if leads_result.data:
                     all_leads_data = leads_result.data
-                    logger.info(f"✅ Encontrados {len(all_leads_data)} leads na etapa 'Sem Contato'")
-                    logger.info(f"🔧 RESULTADO SQL QUERY 2: {len(all_leads_data)} leads retornados (filtro: status_id = {sem_contato_stage_id})")
-                    
+                    logger.info(
+                        f"✅ Encontrados {len(all_leads_data)} leads na etapa 'Sem Contato'"
+                    )
+                    logger.info(
+                        f"🔧 RESULTADO SQL QUERY 2: {len(all_leads_data)} leads retornados (filtro: status_id = {sem_contato_stage_id})"
+                    )
+
                     # Log de alguns leads para debug
                     if len(all_leads_data) > 0:
                         sample_leads = all_leads_data[:3]
-                        logger.debug(f"🔧 AMOSTRA LEADS (Sem Contato): {sample_leads}")
+                        logger.debug(
+                            f"🔧 AMOSTRA LEADS (Sem Contato): {sample_leads}")
                 else:
-                    logger.info("ℹ️ Nenhum lead encontrado atualmente na etapa 'Sem Contato'")
-                    logger.info(f"🔧 RESULTADO SQL QUERY 2: Nenhum lead na etapa 'Sem Contato' (status_id = {sem_contato_stage_id})")
-                    
-                # BUSCAR TAMBÉM LEADS QUE JÁ SAÍRAM DA ETAPA "SEM CONTATO" - QUERY ADICIONAL
-                logger.debug("🔍 Buscando leads que JÁ SAÍRAM da etapa 'Sem Contato' via atividades...")
-                logger.info(f"🔧 SQL QUERY 2B - Buscando leads históricos: SELECT DISTINCT lead_id FROM activities WHERE company_id = '{company_id}' AND tipo = 'mudança_status' AND (status_novo = {sem_contato_stage_id} OR status_anterior = {sem_contato_stage_id})")
-                
-                # Buscar atividades de mudança de status que envolveram a etapa "Sem Contato"
-                historical_activities_query = self.client.table("activities").select("lead_id") \
-                    .eq("company_id", company_id) \
-                    .eq("tipo", "mudança_status") \
-                    .or_(f"status_novo.eq.{sem_contato_stage_id},status_anterior.eq.{sem_contato_stage_id}")
-                
-                historical_result = historical_activities_query.execute()
-                
-                historical_lead_ids = set()
-                if historical_result.data:
-                    historical_lead_ids = {str(activity['lead_id']) for activity in historical_result.data if activity.get('lead_id')}
-                    logger.info(f"✅ Encontrados {len(historical_lead_ids)} leads históricos que passaram por 'Sem Contato'")
-                    logger.info(f"🔧 RESULTADO SQL QUERY 2B: {len(historical_lead_ids)} lead_ids únicos retornados")
-                    
-                    # Buscar dados completos desses leads históricos
-                    if historical_lead_ids:
-                        logger.debug("🔍 Buscando dados completos dos leads históricos...")
-                        historical_leads_query = self.client.table("leads").select("id, responsavel_id, status_id, criado_em, atualizado_em") \
-                            .eq("company_id", company_id) \
-                            .in_("id", list(historical_lead_ids))
-                        
-                        historical_leads_result = historical_leads_query.execute()
-                        
-                        if historical_leads_result.data:
-                            # Combinar leads atuais + históricos, removendo duplicatas
-                            current_lead_ids = {str(lead['id']) for lead in all_leads_data}
-                            
-                            for historical_lead in historical_leads_result.data:
-                                if str(historical_lead['id']) not in current_lead_ids:
-                                    all_leads_data.append(historical_lead)
-                            
-                            logger.info(f"✅ TOTAL COMBINADO: {len(all_leads_data)} leads únicos (atuais + históricos)")
-                else:
-                    logger.info("ℹ️ Nenhum lead histórico encontrado para etapa 'Sem Contato'")
-                    logger.info(f"🔧 RESULTADO SQL QUERY 2B: Nenhuma atividade histórica encontrada")
+                    logger.info(
+                        "ℹ️ Nenhum lead encontrado atualmente na etapa 'Sem Contato'"
+                    )
+                    logger.info(
+                        f"🔧 RESULTADO SQL QUERY 2: Nenhum lead na etapa 'Sem Contato' (status_id = {sem_contato_stage_id})"
+                    )
 
                 if not all_leads_data:
-                    logger.warning("⚠️ Nenhum lead encontrado (atual ou histórico) relacionado à etapa 'Sem Contato'")
+                    logger.warning(
+                        "⚠️ Nenhum lead encontrado (atual ou histórico) relacionado à etapa 'Sem Contato'"
+                    )
                     return 0
 
             except Exception as e:
@@ -2293,9 +2329,13 @@ class SupabaseClient:
 
             # 3. BUSCAR E PROCESSAR ATIVIDADES DIRETAMENTE - LÓGICA SLA INTEGRADA
             try:
-                logger.debug("🔍 Buscando e processando atividades com lógica SLA integrada...")
-                logger.info(f"🔧 SQL QUERY 3 - Processamento SLA: SELECT lead_id, user_id, tipo, responsavel_anterior, responsavel_novo, status_anterior, status_novo, criado_em FROM activities WHERE company_id = '{company_id}' AND tipo IN ('mudança_responsavel', 'mensagem_enviada', 'mudança_status') ORDER BY lead_id, criado_em")
-                
+                logger.debug(
+                    "🔍 Buscando e processando atividades com lógica SLA integrada..."
+                )
+                logger.info(
+                    f"🔧 SQL QUERY 3 - Processamento SLA: SELECT lead_id, user_id, tipo, responsavel_anterior, responsavel_novo, status_anterior, status_novo, criado_em FROM activities WHERE company_id = '{company_id}' AND tipo IN ('mudança_responsavel', 'mensagem_enviada', 'mudança_status') ORDER BY lead_id, criado_em"
+                )
+
                 # Query para buscar atividades ordenadas por lead e data
                 activities_query = self.client.table("activities").select(
                     "lead_id, user_id, tipo, responsavel_anterior, responsavel_novo, status_anterior, status_novo, criado_em"
@@ -2311,14 +2351,16 @@ class SupabaseClient:
                     return 0
 
                 all_activities_data = activities_result.data
-                logger.info(f"✅ Encontradas {len(all_activities_data)} atividades relevantes")
-                
+                logger.info(
+                    f"✅ Encontradas {len(all_activities_data)} atividades relevantes"
+                )
+
                 # Contar por tipo para debug
                 tipos_count = {}
                 for activity in all_activities_data:
                     tipo = activity.get('tipo', 'desconhecido')
                     tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
-                
+
                 logger.debug(f"🔧 TIPOS DE ATIVIDADE: {tipos_count}")
 
             except Exception as e:
@@ -2328,30 +2370,33 @@ class SupabaseClient:
             # 4. PROCESSAR SLA DIRETAMENTE NAS ATIVIDADES
             try:
                 leads_perdidos_count = 0
-                current_lead_states = {}  # lead_id: {responsible, start_time, is_sem_contato}
+                current_lead_states = {
+                }  # lead_id: {responsible, start_time, is_sem_contato}
                 sla_timeout_minutes = 27
-                
+
                 # Identificar leads únicos das atividades
                 unique_lead_ids = set()
                 for activity in all_activities_data:
                     if activity.get('lead_id'):
                         unique_lead_ids.add(str(activity['lead_id']))
-                
+
                 # Adicionar leads atualmente em "Sem Contato"
                 for lead in all_leads_data:
                     if lead.get('status_id') == sem_contato_stage_id:
                         unique_lead_ids.add(str(lead['id']))
-                
-                logger.info(f"🎯 Total de leads únicos corretos: {len(unique_lead_ids)}")
-                
+
+                logger.info(
+                    f"🎯 Total de leads únicos corretos: {len(unique_lead_ids)}"
+                )
+
                 from datetime import timedelta
                 processed_leads = set()
-                
+
                 for activity in all_activities_data:
                     lead_id = str(activity.get('lead_id', ''))
                     if not lead_id or lead_id == 'None':
                         continue
-                    
+
                     # Inicializar estado do lead se necessário
                     if lead_id not in current_lead_states:
                         current_lead_states[lead_id] = {
@@ -2359,98 +2404,126 @@ class SupabaseClient:
                             'start_time': None,
                             'is_sem_contato': False
                         }
-                    
+
                     state = current_lead_states[lead_id]
-                    activity_time = pd.to_datetime(activity['criado_em'], errors='coerce', utc=True)
+                    activity_time = pd.to_datetime(activity['criado_em'],
+                                                   errors='coerce',
+                                                   utc=True)
                     activity_type = activity.get('tipo', '')
-                    
+
                     if lead_id not in processed_leads:
-                        logger.debug(f"   🔧 Lead {lead_id}: processando atividades")
+                        logger.debug(
+                            f"   🔧 Lead {lead_id}: processando atividades")
                         processed_leads.add(lead_id)
-                    
+
                     # MUDANÇA DE STATUS
                     if activity_type == 'mudança_status':
                         status_novo = activity.get('status_novo')
                         status_anterior = activity.get('status_anterior')
-                        
+
                         # Entrada em "Sem Contato"
                         if status_novo == sem_contato_stage_id:
                             state['is_sem_contato'] = True
-                            
+
                         # Saída de "Sem Contato"
                         elif status_anterior == sem_contato_stage_id and status_novo != sem_contato_stage_id:
                             state['is_sem_contato'] = False
                             state['responsible'] = None
                             state['start_time'] = None
-                    
+
                     # MUDANÇA DE RESPONSÁVEL (só conta se em "Sem Contato")
-                    elif activity_type == 'mudança_responsavel' and state['is_sem_contato']:
-                        responsavel_anterior = activity.get('responsavel_anterior')
+                    elif activity_type == 'mudança_responsavel' and state[
+                            'is_sem_contato']:
+                        responsavel_anterior = activity.get(
+                            'responsavel_anterior')
                         responsavel_novo = activity.get('responsavel_novo')
-                        
+
                         # Converter para int se necessário
                         try:
                             if responsavel_anterior is not None:
-                                responsavel_anterior = int(responsavel_anterior)
+                                responsavel_anterior = int(
+                                    responsavel_anterior)
                             if responsavel_novo is not None:
                                 responsavel_novo = int(responsavel_novo)
                         except (ValueError, TypeError):
                             continue
-                        
+
                         # Verificar SLA do responsável anterior
-                        if (state['responsible'] is not None and 
-                            state['start_time'] is not None and
-                            responsavel_anterior == state['responsible']):
-                            
-                            time_diff_minutes = (activity_time - state['start_time']).total_seconds() / 60
-                            
+                        if (state['responsible'] is not None
+                                and state['start_time'] is not None and
+                                responsavel_anterior == state['responsible']):
+
+                            time_diff_minutes = (
+                                activity_time -
+                                state['start_time']).total_seconds() / 60
+
                             # SLA violado (27 minutos sem resposta)
                             if time_diff_minutes >= sla_timeout_minutes:
                                 if state['responsible'] == broker_id:
                                     leads_perdidos_count += 1
-                                    logger.info(f"   🔥 PERDA SLA! Lead {lead_id}, broker {broker_id}, tempo: {time_diff_minutes:.1f}min")
-                        
+                                    logger.info(
+                                        f"   🔥 PERDA SLA! Lead {lead_id}, broker {broker_id}, tempo: {time_diff_minutes:.1f}min"
+                                    )
+
                         # Novo responsável assume
                         if responsavel_novo and responsavel_novo != 0:
                             state['responsible'] = responsavel_novo
                             state['start_time'] = activity_time
-                    
+
                     # MENSAGEM ENVIADA (salva SLA se for do responsável)
-                    elif activity_type == 'mensagem_enviada' and state['is_sem_contato']:
+                    elif activity_type == 'mensagem_enviada' and state[
+                            'is_sem_contato']:
                         user_id = activity.get('user_id')
-                        
+
                         try:
                             if user_id is not None:
                                 user_id = int(user_id)
                         except (ValueError, TypeError):
                             continue
-                        
+
                         # Mensagem do responsável atual salva o SLA
-                        if (state['responsible'] is not None and 
-                            user_id == state['responsible'] and
-                            state['start_time'] is not None):
-                            
-                            time_diff_minutes = (activity_time - state['start_time']).total_seconds() / 60
-                            logger.debug(f"   ✅ SLA SALVO! Lead {lead_id}, responsável {user_id}, tempo: {time_diff_minutes:.1f}min")
-                            
+                        if (state['responsible'] is not None
+                                and user_id == state['responsible']
+                                and state['start_time'] is not None):
+
+                            time_diff_minutes = (
+                                activity_time -
+                                state['start_time']).total_seconds() / 60
+                            logger.debug(
+                                f"   ✅ SLA SALVO! Lead {lead_id}, responsável {user_id}, tempo: {time_diff_minutes:.1f}min"
+                            )
+
                             # Lead salvo, parar contagem
                             state['responsible'] = None
                             state['start_time'] = None
-                
-                logger.info(f"📊 Processados {len(processed_leads)} leads únicos")
+
+                logger.info(
+                    f"📊 Processados {len(processed_leads)} leads únicos")
 
             except Exception as e:
                 logger.error(f"❌ Erro no processamento SLA: {e}")
                 return 0
 
-            logger.info(f"🎯 RESULTADO FINAL - Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade")
-            logger.info(f"📊 Análise baseada em {len(all_leads_data)} leads e {len(all_activities_data)} atividades")
+            logger.info(
+                f"🎯 RESULTADO FINAL - Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade"
+            )
+            logger.info(
+                f"📊 Análise baseada em {len(all_leads_data)} leads e {len(all_activities_data)} atividades"
+            )
             logger.info(f"🔧 RESUMO DAS QUERIES:")
-            logger.info(f"    QUERY 1: Etapa 'Sem Contato' → stage_id = {sem_contato_stage_id}")
-            logger.info(f"    QUERY 2: Leads da empresa → {len(all_leads_data)} registros")
-            logger.info(f"    QUERY 3: Processamento SLA → {len(all_activities_data)} atividades")
-            logger.info(f"    RESULTADO: {leads_perdidos_count} leads perdidos por inatividade")
-            
+            logger.info(
+                f"    QUERY 1: Etapa 'Sem Contato' → stage_id = {sem_contato_stage_id}"
+            )
+            logger.info(
+                f"    QUERY 2: Leads da empresa → {len(all_leads_data)} registros"
+            )
+            logger.info(
+                f"    QUERY 3: Processamento SLA → {len(all_activities_data)} atividades"
+            )
+            logger.info(
+                f"    RESULTADO: {leads_perdidos_count} leads perdidos por inatividade"
+            )
+
             return leads_perdidos_count
 
         except Exception as e:
@@ -2460,8 +2533,6 @@ class SupabaseClient:
             import traceback
             logger.error(f"Traceback completo: {traceback.format_exc()}")
             return 0
-
-    
 
     def _process_lead_sla_state_machine(self, lead_id, lead_activities,
                                         sem_contato_stage_id,
