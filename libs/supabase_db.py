@@ -2048,40 +2048,31 @@ class SupabaseClient:
                 logger.info(
                     f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para rule_name: {rule_name}"
                 )
-                logger.info(
-                    f"Broker activities shape: {broker_activities.shape if not broker_activities.empty else 'Empty'}"
-                )
-                logger.info(
-                    f"All activities shape: {all_activities.shape if not all_activities.empty else 'Empty'}"
-                )
-
-                # Extrair broker_id do contexto atual (passado pela função update_broker_points)
-                # Usar o broker_id da iteração atual do loop de brokers
-                current_broker_id = None
+                logger.info(f"⚠️ AVISO: broker_activities e all_activities são IGNORADOS")
+                logger.info(f"⚠️ A função fará suas próprias consultas isoladas no banco")
                 
-                # O broker_id correto vem do contexto do broker sendo processado
-                # Vamos extrair das atividades do broker ou leads, mas com fallback para o contexto
-                if not broker_activities.empty and 'user_id' in broker_activities.columns:
-                    user_ids = broker_activities['user_id'].dropna().unique()
-                    if len(user_ids) > 0:
-                        current_broker_id = user_ids[0]
-                        logger.debug(f"Broker ID identificado das atividades: {current_broker_id}")
+                # Usar sempre o broker_id do contexto (mais confiável)
+                current_broker_id = broker_id
                 
-                # Se não conseguiu das atividades, tentar dos leads
-                if current_broker_id is None and not broker_leads.empty and 'responsavel_id' in broker_leads.columns:
-                    responsavel_ids = broker_leads['responsavel_id'].dropna().unique()
-                    if len(responsavel_ids) > 0:
-                        current_broker_id = responsavel_ids[0]
-                        logger.debug(f"Broker ID identificado dos leads: {current_broker_id}")
-
-                # Se ainda não conseguiu, usar o broker_id do contexto
+                # Fallback apenas se broker_id for None
                 if current_broker_id is None:
-                    if broker_id is not None:
-                        current_broker_id = broker_id
-                        logger.info(f"✅ Usando broker_id do contexto: {current_broker_id}")
-                    else:
-                        logger.warning("❌ Nenhum broker ID disponível - retornando 0")
-                        return 0
+                    # Tentar extrair das atividades do broker
+                    if not broker_activities.empty and 'user_id' in broker_activities.columns:
+                        user_ids = broker_activities['user_id'].dropna().unique()
+                        if len(user_ids) > 0:
+                            current_broker_id = user_ids[0]
+                            logger.debug(f"Broker ID identificado das atividades (fallback): {current_broker_id}")
+                    
+                    # Tentar extrair dos leads
+                    elif not broker_leads.empty and 'responsavel_id' in broker_leads.columns:
+                        responsavel_ids = broker_leads['responsavel_id'].dropna().unique()
+                        if len(responsavel_ids) > 0:
+                            current_broker_id = responsavel_ids[0]
+                            logger.debug(f"Broker ID identificado dos leads (fallback): {current_broker_id}")
+
+                if current_broker_id is None:
+                    logger.error("❌ Nenhum broker ID disponível - retornando 0")
+                    return 0
 
                 # Converter para int se necessário
                 try:
@@ -2090,11 +2081,14 @@ class SupabaseClient:
                     logger.error(f"Erro ao converter broker_id {current_broker_id} para int")
                     return 0
 
+                logger.info(f"🎯 Usando broker_id: {current_broker_id} (consultas isoladas)")
+
+                # FUNÇÃO COMPLETAMENTE ISOLADA - ignora parâmetros de DataFrames
                 result = self._calculate_leads_perdidos_por_inatividade(
-                    current_broker_id, all_activities, company_id)
+                    current_broker_id, None, company_id)  # None indica que será ignorado
 
                 logger.info(f"🔥 LEADS_PERDIDOS calculado para broker {current_broker_id}: {result}")
-                logger.debug(f"🏁 RESULTADO LEADS_PERDIDOS: {result}")
+                logger.info(f"🏁 RESULTADO FINAL LEADS_PERDIDOS: {result}")
                 
                 return result
 
@@ -2182,7 +2176,7 @@ class SupabaseClient:
 
         Args:
             broker_id: ID do corretor
-            all_activities: DataFrame com todas as atividades (não usado - busca direto do banco)
+            all_activities: DataFrame com todas as atividades (IGNORADO - faz próprias consultas)
             company_id: ID da empresa
 
         Returns:
@@ -2196,11 +2190,12 @@ class SupabaseClient:
             # Converter broker_id para o tipo correto
             broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
 
-            logger.debug(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} ===")
+            logger.info(f"\n=== CALCULANDO SLA PARA BROKER {broker_id} - CONSULTAS ISOLADAS ===")
 
-            # 1. BUSCAR LEADS NA ETAPA "SEM CONTATO" DIRETO DO BANCO
+            # 1. BUSCAR ETAPA "SEM CONTATO" - CONSULTA DIRETA E ISOLADA
+            sem_contato_stage_id = None
             try:
-                # Primeiro, buscar o stage_id da etapa "Sem Contato"
+                logger.debug("🔍 Buscando etapa 'Sem Contato' no banco...")
                 stages_query = self.client.table("stages_list").select("stage_id, stage_name") \
                     .eq("company_id", company_id) \
                     .ilike("stage_name", "%sem contato%")
@@ -2208,99 +2203,150 @@ class SupabaseClient:
                 stages_result = stages_query.execute()
                 
                 if not stages_result.data:
-                    logger.warning("Etapa 'Sem Contato' não encontrada na empresa")
+                    logger.warning("⚠️ Etapa 'Sem Contato' não encontrada na empresa")
                     return 0
                 
                 sem_contato_stage_id = stages_result.data[0]['stage_id']
-                logger.debug(f"Etapa 'Sem Contato' encontrada com ID: {sem_contato_stage_id}")
+                logger.info(f"✅ Etapa 'Sem Contato' encontrada: ID {sem_contato_stage_id}")
 
-                # Buscar leads que estão ou passaram pela etapa "Sem Contato"
-                leads_query = self.client.table("leads").select("id, responsavel_id, status_id, criado_em") \
-                    .eq("company_id", company_id) \
-                    .eq("status_id", sem_contato_stage_id)
+            except Exception as e:
+                logger.error(f"❌ Erro ao buscar etapa 'Sem Contato': {e}")
+                return 0
+
+            # 2. BUSCAR TODOS OS LEADS DA EMPRESA - CONSULTA DIRETA E COMPLETA
+            all_leads_data = []
+            try:
+                logger.debug("🔍 Buscando TODOS os leads da empresa no banco...")
+                leads_query = self.client.table("leads").select("id, responsavel_id, status_id, criado_em, atualizado_em") \
+                    .eq("company_id", company_id)
                 
                 leads_result = leads_query.execute()
                 
-                if not leads_result.data:
-                    logger.debug("Nenhum lead encontrado na etapa 'Sem Contato'")
-                    # Também buscar leads que já saíram da etapa através das atividades
+                if leads_result.data:
+                    all_leads_data = leads_result.data
+                    logger.info(f"✅ Encontrados {len(all_leads_data)} leads total na empresa")
                 else:
-                    logger.debug(f"Encontrados {len(leads_result.data)} leads na etapa 'Sem Contato'")
+                    logger.warning("⚠️ Nenhum lead encontrado na empresa")
+                    return 0
 
             except Exception as e:
-                logger.error(f"Erro ao buscar leads na etapa 'Sem Contato': {e}")
+                logger.error(f"❌ Erro ao buscar leads: {e}")
                 return 0
 
-            # 2. BUSCAR TODAS AS ATIVIDADES RELEVANTES DIRETO DO BANCO
+            # 3. BUSCAR TODAS AS ATIVIDADES DA EMPRESA - CONSULTA DIRETA E COMPLETA
+            all_activities_data = []
             try:
-                # Buscar todas as atividades de mudança de responsável e mensagens
+                logger.debug("🔍 Buscando TODAS as atividades relevantes da empresa no banco...")
                 activities_query = self.client.table("activities").select("*") \
                     .eq("company_id", company_id) \
                     .in_("tipo", ["mudança_responsavel", "mensagem_enviada", "mudança_status"])
 
                 activities_result = activities_query.execute()
 
-                if not activities_result.data:
-                    logger.debug("Nenhuma atividade relevante encontrada")
+                if activities_result.data:
+                    all_activities_data = activities_result.data
+                    logger.info(f"✅ Encontradas {len(all_activities_data)} atividades relevantes")
+                else:
+                    logger.warning("⚠️ Nenhuma atividade relevante encontrada")
                     return 0
 
-                activities_df = pd.DataFrame(activities_result.data)
+            except Exception as e:
+                logger.error(f"❌ Erro ao buscar atividades: {e}")
+                return 0
+
+            # 4. CONVERTER PARA DATAFRAME E PROCESSAR DATAS
+            try:
+                activities_df = pd.DataFrame(all_activities_data)
                 
-                # Converter datas
+                # Converter datas com tratamento de erro
                 if 'criado_em' in activities_df.columns:
                     activities_df['criado_em'] = pd.to_datetime(
                         activities_df['criado_em'], errors='coerce', utc=True)
 
-                logger.debug(f"Encontradas {len(activities_df)} atividades relevantes")
+                # Verificar se temos dados válidos
+                if activities_df.empty or 'lead_id' not in activities_df.columns:
+                    logger.warning("⚠️ DataFrame de atividades vazio ou sem coluna lead_id")
+                    return 0
+
+                logger.debug(f"📊 DataFrame preparado: {len(activities_df)} atividades processáveis")
 
             except Exception as e:
-                logger.error(f"Erro ao buscar atividades: {e}")
+                logger.error(f"❌ Erro ao processar DataFrame de atividades: {e}")
                 return 0
 
-            # 3. PROCESSAR TIMELINE DE CADA LEAD
-            leads_perdidos_count = 0
-            
-            if 'lead_id' not in activities_df.columns:
-                logger.warning("Coluna 'lead_id' não encontrada nas atividades")
-                return 0
-
-            # Buscar todos os leads que tiveram atividades relacionadas ao fluxo de responsabilidade
+            # 5. IDENTIFICAR TODOS OS LEADS ÚNICOS QUE PRECISAM SER ANALISADOS
             unique_lead_ids = set()
             
-            # Leads que têm atividades de mudança de responsável/status ou mensagens
-            for lead_id in activities_df['lead_id'].dropna().unique():
-                unique_lead_ids.add(str(lead_id))
-            
-            # Adicionar leads que estão atualmente em "Sem Contato"
-            if leads_result.data:
-                for lead in leads_result.data:
+            try:
+                # Leads com atividades relevantes
+                lead_ids_from_activities = activities_df['lead_id'].dropna().astype(str).unique()
+                for lead_id in lead_ids_from_activities:
+                    unique_lead_ids.add(str(lead_id))
+                
+                # Leads que estão atualmente em "Sem Contato"
+                leads_sem_contato = [lead for lead in all_leads_data if lead.get('status_id') == sem_contato_stage_id]
+                for lead in leads_sem_contato:
                     unique_lead_ids.add(str(lead['id']))
-
-            logger.debug(f"Processando {len(unique_lead_ids)} leads únicos")
-
-            # Processar cada lead
-            for lead_id in unique_lead_ids:
-                lead_activities = activities_df[
-                    activities_df['lead_id'].astype(str) == str(lead_id)
-                ].sort_values('criado_em')
                 
-                perdas_lead = self._process_lead_responsibility_timeline(
-                    lead_id, lead_activities, broker_id, sem_contato_stage_id
-                )
-                
-                leads_perdidos_count += perdas_lead
+                # Leads que já passaram por "Sem Contato" (buscar por atividades de mudança de status)
+                status_activities = activities_df[
+                    (activities_df['tipo'] == 'mudança_status') & 
+                    ((activities_df['status_novo'] == sem_contato_stage_id) | 
+                     (activities_df['status_anterior'] == sem_contato_stage_id))
+                ]
+                for lead_id in status_activities['lead_id'].dropna().astype(str).unique():
+                    unique_lead_ids.add(str(lead_id))
+
+                logger.info(f"🎯 Total de leads únicos para análise: {len(unique_lead_ids)}")
+
+            except Exception as e:
+                logger.error(f"❌ Erro ao identificar leads únicos: {e}")
+                return 0
+
+            # 6. PROCESSAR TIMELINE DE CADA LEAD INDIVIDUALMENTE
+            leads_perdidos_count = 0
+            
+            for i, lead_id in enumerate(unique_lead_ids):
+                try:
+                    logger.debug(f"📋 [{i+1}/{len(unique_lead_ids)}] Processando lead {lead_id}")
+                    
+                    # Filtrar atividades específicas deste lead
+                    lead_activities = activities_df[
+                        activities_df['lead_id'].astype(str) == str(lead_id)
+                    ].sort_values('criado_em')
+                    
+                    if lead_activities.empty:
+                        logger.debug(f"   ⚠️ Lead {lead_id}: sem atividades relevantes")
+                        continue
+                    
+                    # Processar timeline do lead
+                    perdas_lead = self._process_lead_responsibility_timeline(
+                        lead_id, lead_activities, broker_id, sem_contato_stage_id
+                    )
+                    
+                    if perdas_lead > 0:
+                        logger.info(f"   🔥 Lead {lead_id}: {perdas_lead} perdas para broker {broker_id}")
+                        leads_perdidos_count += perdas_lead
+                    else:
+                        logger.debug(f"   ✅ Lead {lead_id}: nenhuma perda para broker {broker_id}")
+
+                except Exception as lead_error:
+                    logger.error(f"❌ Erro processando lead {lead_id}: {lead_error}")
+                    continue
 
             logger.info(
                 f"🎯 RESULTADO FINAL - Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade"
             )
+            logger.info(f"📊 Análise baseada em {len(all_leads_data)} leads e {len(all_activities_data)} atividades da empresa")
+            
             return leads_perdidos_count
 
         except Exception as e:
             logger.error(
-                f"Erro ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}"
+                f"❌ ERRO GERAL ao calcular leads_perdidos_por_inatividade para broker {broker_id}: {str(e)}"
             )
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Traceback completo: {traceback.format_exc()}")
             return 0
 
     def _process_lead_responsibility_timeline(self, lead_id, lead_activities, target_broker_id, sem_contato_stage_id):
