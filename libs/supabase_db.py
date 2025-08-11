@@ -1339,7 +1339,7 @@ class SupabaseClient:
                     'leads_visitados': 'leads_visitados',
                     'propostas_enviadas': 'propostas_enviadas',
                     'vendas_realizadas': 'vendas_realizadas',
-                    'leads_perdidos': 'leads_perdidos', # Mapear leads perdidos por inatividade
+                    'leads_perdidos': 'leads_perdidos',
                     'leads_descartados': 'leads_descartados'
                 }
 
@@ -1351,8 +1351,9 @@ class SupabaseClient:
 
                         # Log específico para leads_perdidos para debug
                         if rule_name == 'leads_perdidos':
-                            logger.info(f"  - 🔥 SALVANDO leads_perdidos: {count} para broker {broker_name}")
-                            logger.info(f"  - 📋 Valor {count} será salvo na coluna leads_perdidos da tabela broker_points")
+                            logger.info(f"  - 🔥 MAPEANDO leads_perdidos: {count} para broker {broker_name}")
+                            logger.info(f"  - 📋 Valor {count} será salvo na coluna {field_name} da tabela broker_points")
+                            logger.info(f"  - 🎯 broker_points_data['{field_name}'] = {broker_points_data[field_name]}")
 
                 # Debug final: mostrar todos os dados que serão salvos
                 logger.info(f"📊 broker_points_data FINAL para {broker_name}: {broker_points_data}")
@@ -1381,6 +1382,10 @@ class SupabaseClient:
                                     update_data[key] = new_value
 
                         if update_data:
+                            # Log especial para leads_perdidos
+                            if 'leads_perdidos' in update_data:
+                                logger.info(f"🔥 ATUALIZANDO leads_perdidos para {broker_name}: {update_data['leads_perdidos']}")
+                            
                             result = self.client.table("broker_points").update(
                                 update_data).eq("id", broker_id).eq(
                                     "company_id", company_id).execute()
@@ -1394,11 +1399,19 @@ class SupabaseClient:
                             logger.info(
                                 f"Updated {len(update_data)} fields for {broker_name}: {total_points} total points"
                             )
+                            
+                            # Verificação adicional para leads_perdidos
+                            if 'leads_perdidos' in update_data:
+                                logger.info(f"✅ leads_perdidos atualizado com sucesso: {update_data['leads_perdidos']}")
                         else:
                             logger.info(
                                 f"No changes detected for {broker_name} - skipping update"
                             )
                     else:
+                        # Log especial para leads_perdidos na inserção
+                        if broker_points_data.get('leads_perdidos', 0) > 0:
+                            logger.info(f"🔥 INSERINDO leads_perdidos para {broker_name}: {broker_points_data['leads_perdidos']}")
+                        
                         result = self.client.table("broker_points").insert(
                             broker_points_data).execute()
 
@@ -1411,6 +1424,10 @@ class SupabaseClient:
                         logger.info(
                             f"Inserted new record for {broker_name}: {total_points} total points"
                         )
+                        
+                        # Verificação adicional para leads_perdidos na inserção
+                        if broker_points_data.get('leads_perdidos', 0) > 0:
+                            logger.info(f"✅ leads_perdidos inserido com sucesso: {broker_points_data['leads_perdidos']}")
 
                 except Exception as db_error:
                     logger.error(
@@ -2029,7 +2046,7 @@ class SupabaseClient:
             elif rule_name == "leads_perdidos":
                 # Nova lógica: leads perdidos por inatividade (27 minutos sem resposta)
                 logger.info(
-                    f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para broker {rule_name}"
+                    f"\n🔍 INICIANDO CÁLCULO LEADS_PERDIDOS para rule_name: {rule_name}"
                 )
                 logger.info(
                     f"Broker activities shape: {broker_activities.shape if not broker_activities.empty else 'Empty'}"
@@ -2038,18 +2055,32 @@ class SupabaseClient:
                     f"All activities shape: {all_activities.shape if not all_activities.empty else 'Empty'}"
                 )
 
-                # Extrair broker_id das atividades do corretor
+                # Extrair broker_id das atividades do corretor ou dos leads
                 current_broker_id = None
+                
+                # Tentar pegar o broker_id das atividades primeiro
                 if not broker_activities.empty and 'user_id' in broker_activities.columns:
                     user_ids = broker_activities['user_id'].dropna().unique()
                     if len(user_ids) > 0:
                         current_broker_id = user_ids[0]
-                        logger.debug(
-                            f"Broker ID identificado: {current_broker_id}")
+                        logger.debug(f"Broker ID identificado das atividades: {current_broker_id}")
+                
+                # Se não conseguiu das atividades, tentar dos leads
+                if current_broker_id is None and not broker_leads.empty and 'responsavel_id' in broker_leads.columns:
+                    responsavel_ids = broker_leads['responsavel_id'].dropna().unique()
+                    if len(responsavel_ids) > 0:
+                        current_broker_id = responsavel_ids[0]
+                        logger.debug(f"Broker ID identificado dos leads: {current_broker_id}")
 
                 if current_broker_id is None:
-                    logger.debug(
-                        "❌ Nenhum broker ID identificado - retornando 0")
+                    logger.warning("❌ Nenhum broker ID identificado - retornando 0")
+                    return 0
+
+                # Converter para int se necessário
+                try:
+                    current_broker_id = int(current_broker_id) if isinstance(current_broker_id, (str, float)) else current_broker_id
+                except (ValueError, TypeError):
+                    logger.error(f"Erro ao converter broker_id {current_broker_id} para int")
                     return 0
 
                 result = self._calculate_leads_perdidos_por_inatividade(
@@ -2265,8 +2296,9 @@ class SupabaseClient:
                     continue
 
             logger.info(
-                f"Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade (total)"
+                f"🎯 RESULTADO FINAL - Broker {broker_id}: {leads_perdidos_count} leads perdidos por inatividade"
             )
+            logger.info(f"🔄 RETORNANDO valor: {leads_perdidos_count}")
             return leads_perdidos_count
 
         except Exception as e:
