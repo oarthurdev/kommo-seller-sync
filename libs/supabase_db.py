@@ -2367,138 +2367,122 @@ class SupabaseClient:
                 logger.error(f"❌ Erro ao buscar atividades: {e}")
                 return 0
 
-            # 4. PROCESSAR SLA DIRETAMENTE NAS ATIVIDADES
+            # 4. PROCESSAR SLA COM LÓGICA CORRIGIDA
             try:
                 leads_perdidos_count = 0
-                current_lead_states = {
-                }  # lead_id: {responsible, start_time, is_sem_contato}
                 sla_timeout_minutes = 27
-
-                # Identificar leads únicos das atividades
-                unique_lead_ids = set()
-                for activity in all_activities_data:
-                    if activity.get('lead_id'):
-                        unique_lead_ids.add(str(activity['lead_id']))
-
-                # Adicionar leads atualmente em "Sem Contato"
-                for lead in all_leads_data:
-                    if lead.get('status_id') == sem_contato_stage_id:
-                        unique_lead_ids.add(str(lead['id']))
-
-                logger.info(
-                    f"🎯 Total de leads únicos corretos: {len(unique_lead_ids)}"
-                )
-
-                from datetime import timedelta
-                processed_leads = set()
-
+                
+                # Agrupar atividades por lead_id e ordenar por tempo
+                leads_activities = {}
                 for activity in all_activities_data:
                     lead_id = str(activity.get('lead_id', ''))
                     if not lead_id or lead_id == 'None':
                         continue
+                        
+                    if lead_id not in leads_activities:
+                        leads_activities[lead_id] = []
+                    leads_activities[lead_id].append(activity)
+                
+                # Ordenar atividades de cada lead por data
+                for lead_id in leads_activities:
+                    leads_activities[lead_id].sort(key=lambda x: pd.to_datetime(x['criado_em'], errors='coerce', utc=True))
 
-                    # Inicializar estado do lead se necessário
-                    if lead_id not in current_lead_states:
-                        current_lead_states[lead_id] = {
-                            'responsible': None,
-                            'start_time': None,
-                            'is_sem_contato': False
-                        }
+                logger.info(f"🎯 Processando {len(leads_activities)} leads com atividades")
 
-                    state = current_lead_states[lead_id]
-                    activity_time = pd.to_datetime(activity['criado_em'],
-                                                   errors='coerce',
-                                                   utc=True)
-                    activity_type = activity.get('tipo', '')
+                # Processar cada lead individualmente
+                for lead_id, activities in leads_activities.items():
+                    lead_state = {
+                        'is_sem_contato': False,
+                        'current_responsible': None,
+                        'responsibility_start_time': None,
+                        'had_message': False
+                    }
 
-                    if lead_id not in processed_leads:
-                        logger.debug(
-                            f"   🔧 Lead {lead_id}: processando atividades")
-                        processed_leads.add(lead_id)
+                    logger.debug(f"🔧 Analisando lead {lead_id} com {len(activities)} atividades")
 
-                    # MUDANÇA DE STATUS
-                    if activity_type == 'mudança_status':
-                        status_novo = activity.get('status_novo')
-                        status_anterior = activity.get('status_anterior')
+                    for activity in activities:
+                        activity_time = pd.to_datetime(activity['criado_em'], errors='coerce', utc=True)
+                        activity_type = activity.get('tipo', '')
 
-                        # Entrada em "Sem Contato"
-                        if status_novo == sem_contato_stage_id:
-                            state['is_sem_contato'] = True
+                        # MUDANÇA DE STATUS
+                        if activity_type == 'mudança_status':
+                            status_novo = activity.get('status_novo')
+                            status_anterior = activity.get('status_anterior')
 
-                        # Saída de "Sem Contato"
-                        elif status_anterior == sem_contato_stage_id and status_novo != sem_contato_stage_id:
-                            state['is_sem_contato'] = False
-                            state['responsible'] = None
-                            state['start_time'] = None
+                            # Entrada em "Sem Contato"
+                            if status_novo == sem_contato_stage_id:
+                                lead_state['is_sem_contato'] = True
+                                logger.debug(f"   ➡️ Lead {lead_id} entrou em 'Sem Contato' em {activity_time}")
 
-                    # MUDANÇA DE RESPONSÁVEL (só conta se em "Sem Contato")
-                    elif activity_type == 'mudança_responsavel' and state[
-                            'is_sem_contato']:
-                        responsavel_anterior = activity.get(
-                            'responsavel_anterior')
-                        responsavel_novo = activity.get('responsavel_novo')
+                            # Saída de "Sem Contato"  
+                            elif status_anterior == sem_contato_stage_id and status_novo != sem_contato_stage_id:
+                                lead_state['is_sem_contato'] = False
+                                lead_state['current_responsible'] = None
+                                lead_state['responsibility_start_time'] = None
+                                lead_state['had_message'] = False
+                                logger.debug(f"   ⬅️ Lead {lead_id} saiu de 'Sem Contato' em {activity_time}")
 
-                        # Converter para int se necessário
-                        try:
-                            if responsavel_anterior is not None:
-                                responsavel_anterior = int(
-                                    responsavel_anterior)
-                            if responsavel_novo is not None:
-                                responsavel_novo = int(responsavel_novo)
-                        except (ValueError, TypeError):
-                            continue
+                        # MUDANÇA DE RESPONSÁVEL (apenas se em "Sem Contato")
+                        elif activity_type == 'mudança_responsavel' and lead_state['is_sem_contato']:
+                            responsavel_anterior = activity.get('responsavel_anterior')
+                            responsavel_novo = activity.get('responsavel_novo')
 
-                        # Verificar SLA do responsável anterior
-                        if (state['responsible'] is not None
-                                and state['start_time'] is not None and
-                                responsavel_anterior == state['responsible']):
+                            # Converter para int se necessário
+                            try:
+                                if responsavel_anterior is not None:
+                                    responsavel_anterior = int(responsavel_anterior)
+                                if responsavel_novo is not None:
+                                    responsavel_novo = int(responsavel_novo)
+                            except (ValueError, TypeError):
+                                continue
 
-                            time_diff_minutes = (
-                                activity_time -
-                                state['start_time']).total_seconds() / 60
+                            # Se havia um responsável anterior e é o momento de mudança
+                            if (lead_state['current_responsible'] is not None and 
+                                lead_state['responsibility_start_time'] is not None and
+                                responsavel_anterior == lead_state['current_responsible']):
 
-                            # SLA violado (27 minutos sem resposta)
-                            if time_diff_minutes >= sla_timeout_minutes:
-                                if state['responsible'] == broker_id:
-                                    leads_perdidos_count += 1
-                                    logger.info(
-                                        f"   🔥 PERDA SLA! Lead {lead_id}, broker {broker_id}, tempo: {time_diff_minutes:.1f}min"
-                                    )
+                                # Calcular tempo de responsabilidade
+                                time_diff_minutes = (activity_time - lead_state['responsibility_start_time']).total_seconds() / 60
+                                
+                                logger.debug(f"   🔄 Mudança responsável: {responsavel_anterior} → {responsavel_novo}")
+                                logger.debug(f"   ⏱️ Tempo responsabilidade: {time_diff_minutes:.1f} min")
+                                logger.debug(f"   💬 Teve mensagem: {lead_state['had_message']}")
 
-                        # Novo responsável assume
-                        if responsavel_novo and responsavel_novo != 0:
-                            state['responsible'] = responsavel_novo
-                            state['start_time'] = activity_time
+                                # Verificar se passou de 27 minutos SEM mensagem
+                                if time_diff_minutes >= sla_timeout_minutes and not lead_state['had_message']:
+                                    if lead_state['current_responsible'] == broker_id:
+                                        leads_perdidos_count += 1
+                                        logger.info(f"   🔥 LEAD PERDIDO! Lead {lead_id}, broker {broker_id}, tempo: {time_diff_minutes:.1f}min sem mensagem")
+                                    else:
+                                        logger.debug(f"   ⚠️ Perda detectada para outro broker ({lead_state['current_responsible']})")
 
-                    # MENSAGEM ENVIADA (salva SLA se for do responsável)
-                    elif activity_type == 'mensagem_enviada' and state[
-                            'is_sem_contato']:
-                        user_id = activity.get('user_id')
+                            # Definir novo responsável e reiniciar contadores
+                            if responsavel_novo and responsavel_novo != 0:
+                                lead_state['current_responsible'] = responsavel_novo
+                                lead_state['responsibility_start_time'] = activity_time
+                                lead_state['had_message'] = False  # Zerar flag de mensagem
+                                logger.debug(f"   👤 Novo responsável {responsavel_novo} assume em {activity_time}")
 
-                        try:
-                            if user_id is not None:
-                                user_id = int(user_id)
-                        except (ValueError, TypeError):
-                            continue
+                        # MENSAGEM ENVIADA (marca que responsável atual enviou mensagem)
+                        elif activity_type == 'mensagem_enviada' and lead_state['is_sem_contato']:
+                            user_id = activity.get('user_id')
+                            
+                            try:
+                                if user_id is not None:
+                                    user_id = int(user_id)
+                            except (ValueError, TypeError):
+                                continue
 
-                        # Mensagem do responsável atual salva o SLA
-                        if (state['responsible'] is not None
-                                and user_id == state['responsible']
-                                and state['start_time'] is not None):
+                            # Se mensagem é do responsável atual
+                            if (lead_state['current_responsible'] is not None and 
+                                user_id == lead_state['current_responsible']):
+                                
+                                if lead_state['responsibility_start_time']:
+                                    time_diff_minutes = (activity_time - lead_state['responsibility_start_time']).total_seconds() / 60
+                                    lead_state['had_message'] = True
+                                    logger.debug(f"   ✅ Mensagem enviada por responsável {user_id} em {time_diff_minutes:.1f}min - SLA salvo!")
 
-                            time_diff_minutes = (
-                                activity_time -
-                                state['start_time']).total_seconds() / 60
-                            logger.debug(
-                                f"   ✅ SLA SALVO! Lead {lead_id}, responsável {user_id}, tempo: {time_diff_minutes:.1f}min"
-                            )
-
-                            # Lead salvo, parar contagem
-                            state['responsible'] = None
-                            state['start_time'] = None
-
-                logger.info(
-                    f"📊 Processados {len(processed_leads)} leads únicos")
+                logger.info(f"📊 Processados {len(leads_activities)} leads únicos")
 
             except Exception as e:
                 logger.error(f"❌ Erro no processamento SLA: {e}")
@@ -2523,6 +2507,12 @@ class SupabaseClient:
             logger.info(
                 f"    RESULTADO: {leads_perdidos_count} leads perdidos por inatividade"
             )
+            
+            # Log adicional para debug do broker específico
+            if leads_perdidos_count > 0:
+                logger.info(f"🚨 ATENÇÃO: Broker {broker_id} teve {leads_perdidos_count} leads perdidos por não responder em 27 minutos")
+            else:
+                logger.info(f"✅ Broker {broker_id} não perdeu leads por inatividade no período analisado")
 
             return leads_perdidos_count
 
