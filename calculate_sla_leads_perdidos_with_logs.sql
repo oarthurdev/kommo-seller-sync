@@ -1,7 +1,7 @@
 
 -- Função RPC para calcular leads perdidos por inatividade baseado na atribuição de responsável
 CREATE OR REPLACE FUNCTION calculate_sla_leads_perdidos(
-    p_company_id TEXT,
+    p_company_id TEXT ,
     p_broker_id BIGINT
 ) RETURNS INTEGER AS $$
 DECLARE
@@ -78,7 +78,7 @@ BEGIN
     SELECT COUNT(*) INTO v_total_assignments
     FROM activities 
     WHERE company_id = v_company_uuid
-      AND tipo = 'mudança_responsavel'
+      AND tipo = 'mudança_responsável'
       AND responsavel_novo = p_broker_id
       AND criado_em >= (NOW() - INTERVAL '30 days');
 
@@ -109,7 +109,7 @@ BEGIN
         SELECT lead_id, criado_em, responsavel_anterior
         FROM activities 
         WHERE company_id = v_company_uuid
-          AND tipo = 'mudança_responsavel'
+          AND tipo = 'mudança_responsável'
           AND responsavel_novo = p_broker_id
           AND criado_em >= (NOW() - INTERVAL '30 days')
         ORDER BY criado_em DESC
@@ -137,7 +137,7 @@ BEGIN
         FROM activities
         WHERE company_id = v_company_uuid
           AND lead_id = v_current_lead_id
-          AND tipo = 'mudança_responsavel'
+          AND tipo = 'mudança_responsável'
           AND responsavel_anterior = p_broker_id
           AND criado_em > v_assignment_time;
 
@@ -145,13 +145,13 @@ BEGIN
         IF v_next_assignment_time IS NOT NULL THEN
             -- Buscar primeira mensagem do broker após ser atribuído (webhook outgoing)
             -- Converter broker_id para texto para comparação com from_webhook.broker_id
-            SELECT MIN(inserted_at) INTO v_first_broker_message
-            FROM from_webhook
+            SELECT MIN(criado_em) INTO v_first_broker_message
+            FROM activities
             WHERE lead_id::text = v_current_lead_id::text
-              AND broker_id = p_broker_id::text
-              AND message_type = 'outgoing'
-              AND inserted_at >= v_assignment_time
-              AND inserted_at < v_next_assignment_time;
+              AND user_id = p_broker_id::text
+              AND tipo = 'mensagem_enviada'
+              AND criado_em >= v_assignment_time
+              AND criado_em < v_next_assignment_time;
 
             INSERT INTO sla_calculation_logs (
                 company_id, broker_id, broker_name, execution_id, log_level, step_name, message,
