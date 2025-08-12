@@ -1,7 +1,7 @@
 
 -- Função RPC para calcular leads perdidos por inatividade baseado na atribuição de responsável
 CREATE OR REPLACE FUNCTION calculate_sla_leads_perdidos(
-    p_company_id TEXT ,
+    p_company_id TEXT,
     p_broker_id BIGINT
 ) RETURNS INTEGER AS $$
 DECLARE
@@ -18,6 +18,7 @@ DECLARE
     v_time_diff_minutes NUMERIC;
     v_execution_time INTEGER;
     v_company_uuid UUID;
+    v_broker_int INT4;
 BEGIN
     -- Converter company_id para UUID
     BEGIN
@@ -29,6 +30,21 @@ BEGIN
         ) VALUES (
             p_company_id, p_broker_id, v_execution_id, 'ERROR', 'INVALID_COMPANY_ID',
             'Company ID inválido: ' || p_company_id,
+            jsonb_build_object('error', SQLERRM)
+        );
+        RETURN 0;
+    END;
+
+    -- Converter broker_id para INT4
+    BEGIN
+        v_broker_int := p_broker_id::INT4;
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO sla_calculation_logs (
+            company_id, broker_id, execution_id, log_level, step_name, message,
+            additional_data
+        ) VALUES (
+            p_company_id, p_broker_id, v_execution_id, 'ERROR', 'INVALID_BROKER_ID',
+            'Broker ID inválido: ' || p_broker_id,
             jsonb_build_object('error', SQLERRM)
         );
         RETURN 0;
@@ -48,7 +64,7 @@ BEGIN
     BEGIN
         SELECT nome INTO v_broker_name 
         FROM brokers 
-        WHERE id = p_broker_id AND company_id = v_company_uuid;
+        WHERE id = v_broker_int AND company_id = v_company_uuid;
         
         INSERT INTO sla_calculation_logs (
             company_id, broker_id, broker_name, execution_id, log_level, step_name, message
@@ -79,7 +95,7 @@ BEGIN
     FROM activities 
     WHERE company_id = v_company_uuid
       AND tipo = 'mudança_responsável'
-      AND responsavel_novo = p_broker_id
+      AND responsavel_novo = v_broker_int
       AND criado_em >= (NOW() - INTERVAL '30 days');
 
     INSERT INTO sla_calculation_logs (
@@ -110,7 +126,7 @@ BEGIN
         FROM activities 
         WHERE company_id = v_company_uuid
           AND tipo = 'mudança_responsável'
-          AND responsavel_novo = p_broker_id
+          AND responsavel_novo = v_broker_int
           AND criado_em >= (NOW() - INTERVAL '30 days')
         ORDER BY criado_em DESC
         LIMIT 200 -- Limitar para performance
@@ -138,17 +154,17 @@ BEGIN
         WHERE company_id = v_company_uuid
           AND lead_id = v_current_lead_id
           AND tipo = 'mudança_responsável'
-          AND responsavel_anterior = p_broker_id
+          AND responsavel_anterior = v_broker_int
           AND criado_em > v_assignment_time;
 
         -- Se houve mudança de responsável, verificar se foi por inatividade
         IF v_next_assignment_time IS NOT NULL THEN
-            -- Buscar primeira mensagem do broker após ser atribuído (webhook outgoing)
-            -- Converter broker_id para texto para comparação com from_webhook.broker_id
+            -- Buscar primeira mensagem do broker após ser atribuído
             SELECT MIN(criado_em) INTO v_first_broker_message
             FROM activities
-            WHERE lead_id::text = v_current_lead_id::text
-              AND user_id = p_broker_id::text
+            WHERE company_id = v_company_uuid
+              AND lead_id = v_current_lead_id
+              AND user_id = v_broker_int
               AND tipo = 'mensagem_enviada'
               AND criado_em >= v_assignment_time
               AND criado_em < v_next_assignment_time;
