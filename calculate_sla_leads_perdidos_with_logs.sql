@@ -17,7 +17,23 @@ DECLARE
     v_first_broker_message TIMESTAMP;
     v_time_diff_minutes NUMERIC;
     v_execution_time INTEGER;
+    v_company_uuid UUID;
 BEGIN
+    -- Converter company_id para UUID
+    BEGIN
+        v_company_uuid := p_company_id::UUID;
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO sla_calculation_logs (
+            company_id, broker_id, execution_id, log_level, step_name, message,
+            additional_data
+        ) VALUES (
+            p_company_id, p_broker_id, v_execution_id, 'ERROR', 'INVALID_COMPANY_ID',
+            'Company ID inválido: ' || p_company_id,
+            jsonb_build_object('error', SQLERRM)
+        );
+        RETURN 0;
+    END;
+
     -- Log inicial
     INSERT INTO sla_calculation_logs (
         company_id, broker_id, execution_id, log_level, step_name, message,
@@ -32,7 +48,7 @@ BEGIN
     BEGIN
         SELECT nome INTO v_broker_name 
         FROM brokers 
-        WHERE id = p_broker_id AND company_id = p_company_id::uuid;
+        WHERE id = p_broker_id AND company_id = v_company_uuid;
         
         INSERT INTO sla_calculation_logs (
             company_id, broker_id, broker_name, execution_id, log_level, step_name, message
@@ -61,7 +77,7 @@ BEGIN
 
     SELECT COUNT(*) INTO v_total_assignments
     FROM activities 
-    WHERE company_id = p_company_id::uuid
+    WHERE company_id = v_company_uuid
       AND tipo = 'mudança_responsavel'
       AND responsavel_novo = p_broker_id
       AND criado_em >= (NOW() - INTERVAL '30 days');
@@ -92,7 +108,7 @@ BEGIN
     FOR v_activity_record IN 
         SELECT lead_id, criado_em, responsavel_anterior
         FROM activities 
-        WHERE company_id = p_company_id::uuid
+        WHERE company_id = v_company_uuid
           AND tipo = 'mudança_responsavel'
           AND responsavel_novo = p_broker_id
           AND criado_em >= (NOW() - INTERVAL '30 days')
@@ -119,7 +135,7 @@ BEGIN
         -- Buscar próxima mudança de responsável deste lead (indicando que o broker perdeu o lead)
         SELECT MIN(criado_em) INTO v_next_assignment_time
         FROM activities
-        WHERE company_id = p_company_id::uuid
+        WHERE company_id = v_company_uuid
           AND lead_id = v_current_lead_id
           AND tipo = 'mudança_responsavel'
           AND responsavel_anterior = p_broker_id
@@ -128,9 +144,10 @@ BEGIN
         -- Se houve mudança de responsável, verificar se foi por inatividade
         IF v_next_assignment_time IS NOT NULL THEN
             -- Buscar primeira mensagem do broker após ser atribuído (webhook outgoing)
+            -- Converter broker_id para texto para comparação com from_webhook.broker_id
             SELECT MIN(inserted_at) INTO v_first_broker_message
             FROM from_webhook
-            WHERE lead_id = v_current_lead_id
+            WHERE lead_id::text = v_current_lead_id::text
               AND broker_id = p_broker_id::text
               AND message_type = 'outgoing'
               AND inserted_at >= v_assignment_time
