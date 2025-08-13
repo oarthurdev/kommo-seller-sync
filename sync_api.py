@@ -879,6 +879,7 @@ def debug_events(company_id):
         if response and response.get("_embedded") and response["_embedded"].get("events"):
             events_count = len(response["_embedded"]["events"])
             
+        from datetime import datetime, timezone
         return jsonify({
             'status': 'success',
             'company_id': company_id,
