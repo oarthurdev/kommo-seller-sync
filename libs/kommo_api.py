@@ -822,9 +822,12 @@ class KommoAPI:
                     params = {
                         "page": page,
                         "limit": page_size,
-                        "filter[entity]": "lead",
                         "filter[type]": event_type,
                     }
+
+                    # Only add entity filter for non-chat message events
+                    if event_type != "outgoing_chat_message":
+                        params["filter[entity]"] = "lead"
 
                     if from_timestamp:
                         params["filter[created_at][from]"] = from_timestamp
