@@ -778,11 +778,11 @@ class SupabaseClient:
                     })
             
             if points_to_insert:
-                result = self.client.table("broker_points").insert(points_to_insert).execute()
+                result = self.client.table("broker_points").upsert(points_to_insert, on_conflict='id').execute()
                 if hasattr(result, "error") and result.error:
                     raise Exception(f"Supabase error: {result.error}")
                     
-                logger.info(f"Initialized broker points for {len(points_to_insert)} new brokers in company {company_id}")
+                logger.info(f"Initialized/updated broker points for {len(points_to_insert)} brokers in company {company_id}")
             else:
                 logger.info(f"All brokers already have points initialized for company {company_id}")
                 
