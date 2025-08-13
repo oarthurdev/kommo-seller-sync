@@ -706,6 +706,7 @@ class KommoAPI:
             
             # Convert back to datetime for logging
             if from_timestamp:
+                from datetime import datetime, timezone
                 from_dt = datetime.fromtimestamp(from_timestamp, tz=timezone.utc)
                 logger.info(
                     f"Starting incremental sync from (unix): {from_timestamp} ({from_dt.isoformat()})"
