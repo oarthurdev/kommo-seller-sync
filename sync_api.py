@@ -888,50 +888,6 @@ def get_broker_points_status(company_id):
         return jsonify({
             'status': 'error',
             'message': str(e)
-        }), 500rs_result.data else 0
-            calculated_points = len(points_count_result.data) if points_count_result.data else 0
-            
-            return jsonify({
-                'status': 'success',
-                'company_id': company_id,
-                'calculation_status': {
-                    'is_calculating': is_calculating,
-                    'sync_status': company_sync_status.get('status', 'unknown'),
-                    'last_sync': company_sync_status.get('last_sync'),
-                    'last_sync_start': company_sync_status.get('last_sync_start'),
-                    'total_syncs': company_sync_status.get('total_syncs', 0),
-                    'errors': company_sync_status.get('errors', 0),
-                    'thread_health': company_sync_status.get('thread_health', 'unknown')
-                },
-                'broker_points': {
-                    'total_brokers': total_brokers,
-                    'calculated_points': calculated_points,
-                    'completion_percentage': (calculated_points / total_brokers * 100) if total_brokers > 0 else 0,
-                    'last_update': last_points_update
-                }
-            })
-        else:
-            return jsonify({
-                'status': 'success',
-                'company_id': company_id,
-                'calculation_status': {
-                    'is_calculating': False,
-                    'sync_status': 'not_started',
-                    'message': 'No sync process found for this company'
-                },
-                'broker_points': {
-                    'total_brokers': 0,
-                    'calculated_points': 0,
-                    'completion_percentage': 0,
-                    'last_update': None
-                }
-            })
-            
-    except Exception as e:
-        logger.error(f"Error getting broker points status for company {company_id}: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
         }), 500
 
 
