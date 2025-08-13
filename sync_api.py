@@ -793,6 +793,88 @@ def get_sla_execution_summary(company_id, execution_id):
         }), 500
 
 
+@app.route('/broker-points-status/<company_id>')
+def get_broker_points_status(company_id):
+    """Get broker points calculation status for a specific company"""
+    try:
+        # Check if there's an active sync for this company
+        if company_id in sync_status:
+            company_sync_status = sync_status[company_id]
+            
+            # Check if currently calculating points
+            is_calculating = (
+                company_sync_status.get('status') == 'syncing' or 
+                company_sync_status.get('last_sync_start') and 
+                not company_sync_status.get('last_sync')
+            )
+            
+            # Get last broker points update timestamp
+            points_result = supabase.client.table("broker_points").select(
+                "updated_at"
+            ).eq("company_id", company_id).order(
+                "updated_at", desc=True
+            ).limit(1).execute()
+            
+            last_points_update = None
+            if points_result.data:
+                last_points_update = points_result.data[0]['updated_at']
+            
+            # Count total brokers and calculated points
+            brokers_result = supabase.client.table("brokers").select(
+                "id"
+            ).eq("company_id", company_id).execute()
+            
+            points_count_result = supabase.client.table("broker_points").select(
+                "id"
+            ).eq("company_id", company_id).execute()
+            
+            total_brokers = len(brokers_result.data) if brokers_result.data else 0
+            calculated_points = len(points_count_result.data) if points_count_result.data else 0
+            
+            return jsonify({
+                'status': 'success',
+                'company_id': company_id,
+                'calculation_status': {
+                    'is_calculating': is_calculating,
+                    'sync_status': company_sync_status.get('status', 'unknown'),
+                    'last_sync': company_sync_status.get('last_sync'),
+                    'last_sync_start': company_sync_status.get('last_sync_start'),
+                    'total_syncs': company_sync_status.get('total_syncs', 0),
+                    'errors': company_sync_status.get('errors', 0),
+                    'thread_health': company_sync_status.get('thread_health', 'unknown')
+                },
+                'broker_points': {
+                    'total_brokers': total_brokers,
+                    'calculated_points': calculated_points,
+                    'completion_percentage': (calculated_points / total_brokers * 100) if total_brokers > 0 else 0,
+                    'last_update': last_points_update
+                }
+            })
+        else:
+            return jsonify({
+                'status': 'success',
+                'company_id': company_id,
+                'calculation_status': {
+                    'is_calculating': False,
+                    'sync_status': 'not_started',
+                    'message': 'No sync process found for this company'
+                },
+                'broker_points': {
+                    'total_brokers': 0,
+                    'calculated_points': 0,
+                    'completion_percentage': 0,
+                    'last_update': None
+                }
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting broker points status for company {company_id}: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
 @app.route('/reset-sync/<company_id>', methods=['POST'])
 def reset_sync_timestamp(company_id):
     """Reset last_sync timestamp to start fresh sync"""

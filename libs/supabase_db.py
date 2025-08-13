@@ -739,363 +739,7 @@ class SupabaseClient:
             logger.error(f"Failed to retrieve broker points: {str(e)}")
             raise
 
-    def upsert_broker_points(self, points_df):
-        """
-        Atualiza ou insere os dados na tabela broker_points no Supabase.
-
-        Args:
-            points_df (pandas.DataFrame): DataFrame contendo os dados de pontuação dos corretores.
-        """
-        import numpy as np
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        try:
-            if points_df.empty:
-                logger.warning("Nenhum dado de pontos para inserir.")
-                return
-
-            # Garante que company_id está presente
-            if 'company_id' not in points_df.columns:
-                logger.error("DataFrame não contém a coluna company_id")
-                return
-
-            # Filtra registros por company_id
-            unique_companies = points_df['company_id'].unique()
-            all_responses = []
-
-            for company_id in unique_companies:
-                company_df = points_df[points_df['company_id'] ==
-                                       company_id].copy()
-
-                logger.info(
-                    f"Upsert de {len(company_df)} registros na tabela broker_points para company_id {company_id}."
-                )
-
-                # Trata valores infinitos ou inválidos
-                numeric_cols = company_df.select_dtypes(
-                    include=['float', 'int']).columns
-                for col in numeric_cols:
-                    mask = ~np.isfinite(company_df[col])
-                    if mask.any():
-                        company_df.loc[mask, col] = None
-
-                # Realiza o upsert na tabela broker_points
-                records = company_df.to_dict("records")
-                for record in records:
-                    for key, value in record.items():
-                        if isinstance(value, pd.Timestamp):
-                            record[key] = value.isoformat()
-
-                # Verifica se os registros já existem e faz update ou insert
-                for record in records:
-                    broker_id = record.get('id')
-                    if broker_id:
-                        try:
-                            # Verifica se o registro já existe
-                            existing = self.client.table(
-                                "broker_points").select("id").eq(
-                                    "id",
-                                    broker_id).eq("company_id",
-                                                  company_id).execute()
-
-                            if existing.data:
-                                # Update se existe - remove campos que não devem ser atualizados na condição
-                                update_record = {
-                                    k: v
-                                    for k, v in record.items()
-                                    if k not in ['id', 'company_id']
-                                }
-                                response = self.client.table(
-                                    "broker_points").update(update_record).eq(
-                                        "id",
-                                        broker_id).eq("company_id",
-                                                      company_id).execute()
-                            else:
-                                # Insert se não existe
-                                response = self.client.table(
-                                    "broker_points").insert(record).execute()
-
-                            if hasattr(response, "error") and response.error:
-                                logger.error(
-                                    f"Error updating broker points: {response.error}"
-                                )
-                                raise Exception(
-                                    f"Error updating broker points: {response.error}"
-                                )
-
-                            all_responses.append(response)
-                        except Exception as individual_error:
-                            logger.warning(
-                                f"Error processing record for broker {broker_id}: {individual_error}"
-                            )
-                            continue
-
-            return all_responses
-
-        except Exception as e:
-            logger.error(f"Erro ao fazer upsert em broker_points: {e}")
-            raise
-
-    def ensure_webhook_table(self):
-        """
-        Ensure the from_webhook table exists with proper structure
-        This is a safety check - the table should be created in Supabase dashboard
-        """
-        try:
-            # Test if table exists by trying to select from it
-            result = self.client.table("from_webhook").select("*").limit(
-                1).execute()
-            logger.info("from_webhook table exists and is accessible")
-        except Exception as e:
-            logger.warning(
-                f"from_webhook table may not exist or is not accessible: {str(e)}"
-            )
-            logger.info(
-                "Please ensure the from_webhook table is created in Supabase with the following structure:"
-            )
-            logger.info("""
-            CREATE TABLE from_webhook (
-                id SERIAL PRIMARY KEY,
-                webhook_type TEXT,
-                payload_id TEXT,
-                chat_id TEXT,
-                talk_id TEXT,
-                contact_id TEXT,
-                text TEXT,
-                created_at TEXT,
-                element_type TEXT,
-                entity_type TEXT,
-                element_id TEXT,
-                entity_id TEXT,
-                message_type TEXT,
-                author_id TEXT,
-                author_type TEXT,
-                author_name TEXT,
-                author_avatar_url TEXT,
-                origin TEXT,
-                raw_payload JSONB,
-                broker_id TEXT,
-                lead_id TEXT,
-                inserted_at TIMESTAMP DEFAULT NOW()
-            );
-            """)
-
-    def link_webhook_message_to_broker(self, webhook_message):
-        """
-        Vincula uma mensagem de webhook ao broker responsável
-
-        Args:
-            webhook_message (dict): Dados da mensagem do webhook
-
-        Returns:
-            dict: Dados atualizados com broker_id e lead_id
-        """
-        try:
-            broker_id = None
-            lead_id = None
-
-            # 1. Se a mensagem tem author_id e é do tipo "outgoing", é do broker
-            if (webhook_message.get('author_id')
-                    and webhook_message.get('message_type') == 'outgoing'):
-
-                # Verificar se o author_id é um broker válido
-                broker_result = self.client.table("brokers").select(
-                    "id, nome").eq("id",
-                                   webhook_message['author_id']).execute()
-
-                if broker_result.data:
-                    broker_id = webhook_message['author_id']
-                    logger.info(
-                        f"Mensagem vinculada ao broker {broker_id} (mensagem enviada)"
-                    )
-
-            # 2. Para mensagens recebidas, buscar pelo lead responsável
-            elif webhook_message.get('entity_id') and webhook_message.get(
-                    'entity_type') == 'lead':
-                lead_result = self.client.table(
-                    "leads").select("id, responsavel_id").eq(
-                        "id", webhook_message['entity_id']).execute()
-
-                if lead_result.data:
-                    lead_data = lead_result.data[0]
-                    lead_id = lead_data['id']
-                    broker_id = lead_data['responsavel_id']
-                    logger.info(
-                        f"Mensagem vinculada ao broker {broker_id} via lead {lead_id}"
-                    )
-
-            # 3. Se ainda não encontrou, tentar pelo contact_id
-            elif webhook_message.get('contact_id'):
-                # Buscar leads que tenham esse contact como contato principal
-                contact_leads = self.client.table("leads").select(
-                    "id, responsavel_id, contato_nome").ilike(
-                        "contato_nome",
-                        f"%{webhook_message.get('author_name', '')}%").execute(
-                        )
-
-                if contact_leads.data:
-                    # Pegar o lead mais recente deste contato
-                    latest_lead = contact_leads.data[0]
-                    lead_id = latest_lead['id']
-                    broker_id = latest_lead['responsavel_id']
-                    logger.info(
-                        f"Mensagem vinculada ao broker {broker_id} via contact matching"
-                    )
-
-            # Atualizar o registro do webhook com os IDs encontrados
-            if broker_id or lead_id:
-                update_data = {}
-                if broker_id:
-                    update_data['broker_id'] = broker_id
-                if lead_id:
-                    update_data['lead_id'] = lead_id
-
-                # Atualizar na base de dados se temos o ID do webhook
-                if webhook_message.get('id'):
-                    self.client.table("from_webhook").update(update_data).eq(
-                        "payload_id",
-                        webhook_message.get('payload_id')).execute()
-
-                webhook_message.update(update_data)
-                logger.info(
-                    f"Webhook atualizado com broker_id: {broker_id}, lead_id: {lead_id}"
-                )
-
-            return webhook_message
-
-        except Exception as e:
-            logger.error(f"Erro ao vincular mensagem ao broker: {str(e)}")
-            return webhook_message
-
-    def get_broker_messages(self, broker_id, limit=50):
-        """
-        Busca mensagens de um broker específico
-
-        Args:
-            broker_id (str): ID do broker
-            limit (int): Limite de mensagens
-
-        Returns:
-            list: Lista de mensagens do broker
-        """
-        try:
-            result = self.client.table("from_webhook").select("*").eq(
-                "broker_id",
-                broker_id).order("inserted_at",
-                                 desc=True).limit(limit).execute()
-
-            return result.data if result.data else []
-
-        except Exception as e:
-            logger.error(
-                f"Erro ao buscar mensagens do broker {broker_id}: {str(e)}")
-            return []
-
-    def get_lead_messages(self, lead_id, limit=50):
-        """
-        Busca mensagens de um lead específico
-
-        Args:
-            lead_id (str): ID do lead
-            limit (int): Limite de mensagens
-
-        Returns:
-            list: Lista de mensagens do lead
-        """
-        try:
-            result = self.client.table("from_webhook").select("*").eq(
-                "lead_id", lead_id).order("inserted_at",
-                                          desc=True).limit(limit).execute()
-
-            return result.data if result.data else []
-
-        except Exception as e:
-            logger.error(
-                f"Erro ao buscar mensagens do lead {lead_id}: {str(e)}")
-            return []
-
-    def initialize_broker_points(self, company_id=None):
-        """
-        Cria registros na tabela broker_points para todos os corretores cadastrados,
-        com os campos de pontuação zerados. Evita duplicações verificando existência.
-        """
-        company_id = company_id or self.kommo_config.get('company_id')
-        try:
-            # Buscar corretores com cargo "Corretor" e company_id específico
-            brokers_result = self.client.table("brokers").select(
-                "id, nome").eq("cargo", "Corretor").eq("company_id",
-                                                       company_id).execute()
-            if hasattr(brokers_result, "error") and brokers_result.error:
-                raise Exception(
-                    f"Erro ao buscar corretores: {brokers_result.error}")
-
-            brokers = brokers_result.data
-            if not brokers:
-                logger.warning(
-                    "Nenhum corretor encontrado para inicializar broker_points."
-                )
-                return
-
-            # Buscar registros existentes para evitar duplicatas
-            existing_result = self.client.table("broker_points").select(
-                "id").eq("company_id", company_id).execute()
-
-            existing_ids = set()
-            if existing_result.data:
-                existing_ids = {
-                    record['id']
-                    for record in existing_result.data
-                }
-
-            # Filtrar apenas corretores que não têm registros
-            brokers_to_insert = [
-                b for b in brokers if b['id'] not in existing_ids
-            ]
-
-            if not brokers_to_insert:
-                logger.info(
-                    f"Todos os corretores já têm registros em broker_points para company_id {company_id}"
-                )
-                return True
-
-            # Criar registros com pontuação zero e company_id (apenas campos do novo schema)
-            now = datetime.now().isoformat()
-            new_records = [{
-                "id": b["id"],
-                "company_id": company_id,
-                "nome": b["nome"],
-                "leads_visitados": 0,
-                "propostas_enviadas": 0,
-                "vendas_realizadas": 0,
-                "leads_perdidos": 0,
-                "leads_descartados": 0,
-                "pontos": 0,
-                "updated_at": now
-            } for b in brokers_to_insert]
-
-            # Inserir registros novos
-            if new_records:
-                result = self.client.table("broker_points").insert(
-                    new_records).execute()
-
-                if hasattr(result, "error") and result.error:
-                    logger.error(
-                        f"Erro ao inserir broker_points: {result.error}")
-                    return False
-
-                logger.info(
-                    f"Broker points inicializados para {len(new_records)} corretores."
-                )
-            return True
-
-        except Exception as e:
-            logger.error(f"Erro ao inicializar broker_points: {str(e)}")
-            # Não fazer raise para não quebrar o fluxo principal
-            return False
-
-    def update_broker_points(self,
+    def upsert_broker_points(self,
                              brokers=[],
                              leads=[],
                              activities=[],
@@ -2091,7 +1735,7 @@ class SupabaseClient:
                     logger.error("❌ Nenhum broker ID disponível - retornando 0")
                     return 0
 
-                # Converter para int se necessário
+                # Converter broker_id para o tipo correto
                 try:
                     current_broker_id = int(current_broker_id) if isinstance(
                         current_broker_id, (str, float)) else current_broker_id
@@ -2180,7 +1824,7 @@ class SupabaseClient:
                                                   all_activities, company_id):
         """
         Calcula leads perdidos por inatividade usando função RPC otimizada do Supabase.
-        
+
         Args:
             broker_id: ID do corretor
             all_activities: DataFrame (IGNORADO - usa RPC direto)
@@ -2222,7 +1866,7 @@ class SupabaseClient:
     def get_sla_calculation_logs(self, company_id, broker_id=None, execution_id=None, limit=100):
         """
         Busca logs detalhados do cálculo de SLA.
-        
+
         Args:
             company_id: ID da empresa
             broker_id: ID do corretor (opcional)
@@ -2234,18 +1878,18 @@ class SupabaseClient:
         """
         try:
             query = self.client.table("sla_calculation_logs").select("*")
-            
+
             if company_id:
                 query = query.eq("company_id", company_id)
-            
+
             if broker_id:
                 query = query.eq("broker_id", broker_id)
-            
+
             if execution_id:
                 query = query.eq("execution_id", execution_id)
-            
+
             result = query.order("created_at", desc=True).limit(limit).execute()
-            
+
             if hasattr(result, "error") and result.error:
                 logger.error(f"Erro ao buscar logs SLA: {result.error}")
                 return []
@@ -2259,7 +1903,7 @@ class SupabaseClient:
     def get_sla_execution_summary(self, company_id, execution_id):
         """
         Busca resumo de uma execução específica do cálculo SLA.
-        
+
         Args:
             company_id: ID da empresa
             execution_id: ID da execução
@@ -2269,7 +1913,7 @@ class SupabaseClient:
         """
         try:
             logs = self.get_sla_calculation_logs(company_id, execution_id=execution_id, limit=1000)
-            
+
             if not logs:
                 return {}
 
@@ -2292,12 +1936,12 @@ class SupabaseClient:
             for log in logs:
                 step = log.get('step_name')
                 level = log.get('log_level')
-                
+
                 # Contabilizar steps
                 if step not in summary['steps']:
                     summary['steps'][step] = 0
                 summary['steps'][step] += 1
-                
+
                 # Capturar tempos
                 if step == 'INIT' and not summary['start_time']:
                     summary['start_time'] = log.get('created_at')
@@ -2305,12 +1949,12 @@ class SupabaseClient:
                     summary['end_time'] = log.get('created_at')
                     summary['execution_time_ms'] = log.get('execution_time_ms')
                     summary['leads_processed'] = log.get('leads_processed', 0)
-                    
+
                     # Extrair leads perdidos do additional_data
                     additional_data = log.get('additional_data', {})
                     if isinstance(additional_data, dict):
                         summary['leads_perdidos'] = additional_data.get('leads_perdidos', 0)
-                
+
                 # Coletar erros e warnings
                 if level == 'ERROR':
                     summary['errors'].append(log.get('message'))
@@ -2323,7 +1967,7 @@ class SupabaseClient:
             logger.error(f"Erro ao gerar resumo da execução SLA: {str(e)}")
             return {}
 
-    
+
 
     def _process_lead_sla_state_machine(self, lead_id, lead_activities,
                                         sem_contato_stage_id,
