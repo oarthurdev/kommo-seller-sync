@@ -793,6 +793,42 @@ def get_sla_execution_summary(company_id, execution_id):
         }), 500
 
 
+@app.route('/reset-sync/<company_id>', methods=['POST'])
+def reset_sync_timestamp(company_id):
+    """Reset last_sync timestamp to start fresh sync"""
+    try:
+        from datetime import datetime, timezone, timedelta
+        
+        # Set last_sync to 7 days ago to avoid overload
+        reset_date = datetime.now(timezone.utc) - timedelta(days=7)
+        
+        result = supabase.client.table("kommo_config").update({
+            "last_sync": reset_date.isoformat()
+        }).eq("company_id", company_id).eq("active", True).execute()
+        
+        if hasattr(result, "error") and result.error:
+            return jsonify({
+                'status': 'error',
+                'message': f"Database error: {result.error}"
+            }), 500
+            
+        logger.info(f"Reset last_sync for company {company_id} to {reset_date.isoformat()}")
+        
+        return jsonify({
+            'status': 'success',
+            'company_id': company_id,
+            'new_last_sync': reset_date.isoformat(),
+            'message': 'Sync timestamp reset successfully'
+        })
+
+    except Exception as e:
+        logger.error(f"Error resetting sync timestamp: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     # Ensure webhook table exists
     supabase.ensure_webhook_table()

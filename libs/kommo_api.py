@@ -280,22 +280,36 @@ class KommoAPI:
 
                 if result.data and result.data[0].get('last_sync'):
                     last_sync_str = result.data[0]['last_sync']
-                    last_sync_date = datetime.fromisoformat(
-                        last_sync_str.replace('Z', '+00:00'))
-                    # Add safety margin of 60 seconds to avoid boundary misses
-                    from_dt = last_sync_date - timedelta(seconds=60)
-                    logger.info(
-                        f"Retrieved last sync date from database: {last_sync_date}, using: {from_dt}"
-                    )
-                    return int(from_dt.timestamp())
+                    try:
+                        last_sync_date = datetime.fromisoformat(
+                            last_sync_str.replace('Z', '+00:00'))
+                        
+                        # Ensure the date is not in the future
+                        now = datetime.now(timezone.utc)
+                        if last_sync_date > now:
+                            logger.warning(
+                                f"Last sync date {last_sync_date} is in the future, using current time"
+                            )
+                            last_sync_date = now
+                        
+                        # Add safety margin of 60 seconds to avoid boundary misses
+                        from_dt = last_sync_date - timedelta(seconds=60)
+                        logger.info(
+                            f"Retrieved last sync date from database: {last_sync_date}, using: {from_dt}"
+                        )
+                        return int(from_dt.timestamp())
+                    except Exception as parse_error:
+                        logger.error(f"Error parsing last_sync date: {parse_error}")
+                        # Fall through to fallback logic
                 else:
-                    # If no last sync, get events from last 7 days to avoid overload
-                    fallback_date = datetime.now(
-                        timezone.utc) - timedelta(days=7)
-                    logger.info(
-                        f"No previous sync found, using fallback: {fallback_date}"
-                    )
-                    return int(fallback_date.timestamp())
+                    logger.info("No last_sync found in database")
+                    
+            # If no last sync or error parsing, get events from last 7 days to avoid overload
+            fallback_date = datetime.now(timezone.utc) - timedelta(days=7)
+            logger.info(
+                f"Using fallback date: {fallback_date}"
+            )
+            return int(fallback_date.timestamp())
         except Exception as e:
             logger.error(f"Error getting last sync timestamp: {e}")
             # Fallback to last 24 hours
@@ -660,28 +674,44 @@ class KommoAPI:
                 if dt_or_ts is None:
                     return None
                 if isinstance(dt_or_ts, (int, float)):
-                    return int(dt_or_ts)
+                    # Validate timestamp is not in the future or too far in past
+                    ts = int(dt_or_ts)
+                    now_ts = int(datetime.now(timezone.utc).timestamp())
+                    # Check if timestamp is more than 1 day in future or more than 1 year in past
+                    if ts > now_ts + 86400:  # 1 day in future
+                        logger.warning(f"Timestamp {ts} is in the future, using current time")
+                        return now_ts
+                    elif ts < now_ts - 31536000:  # 1 year in past
+                        logger.warning(f"Timestamp {ts} is too old, using 7 days ago")
+                        return now_ts - 604800  # 7 days ago
+                    return ts
                 if isinstance(dt_or_ts, str):
                     if dt_or_ts.isdigit():
-                        return int(dt_or_ts)
+                        return _to_unix_seconds(int(dt_or_ts))
                     try:
-                        return int(
-                            datetime.fromisoformat(
-                                dt_or_ts.replace('Z', '+00:00')).timestamp())
+                        dt = datetime.fromisoformat(dt_or_ts.replace('Z', '+00:00'))
+                        return _to_unix_seconds(int(dt.timestamp()))
                     except Exception:
                         return None
                 if isinstance(dt_or_ts, datetime):
                     if dt_or_ts.tzinfo is None:
                         dt_or_ts = dt_or_ts.replace(tzinfo=timezone.utc)
-                    return int(dt_or_ts.timestamp())
+                    return _to_unix_seconds(int(dt_or_ts.timestamp()))
                 return None
 
             from_store = self._get_last_sync_timestamp(company_id)
             base_from_ts = _to_unix_seconds(
                 last_sync_date) or _to_unix_seconds(from_store) or 0
             from_timestamp = base_from_ts + 1 if base_from_ts else 0
-            logger.info(
-                f"Starting incremental sync from (unix): {from_timestamp}")
+            
+            # Convert back to datetime for logging
+            if from_timestamp:
+                from_dt = datetime.fromtimestamp(from_timestamp, tz=timezone.utc)
+                logger.info(
+                    f"Starting incremental sync from (unix): {from_timestamp} ({from_dt.isoformat()})"
+                )
+            else:
+                logger.info("Starting incremental sync from beginning (no timestamp)")
 
             # 4) paginação
             limits = self._get_safe_pagination_limits()
