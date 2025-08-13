@@ -831,6 +831,66 @@ def get_broker_points_status(company_id):
             total_brokers = len(brokers_result.data) if brokers_result.data else 0
             calculated_points = len(points_count_result.data) if points_count_result.data else 0
             
+            # Calculate completion percentage
+            completion_percentage = (calculated_points / total_brokers * 100) if total_brokers > 0 else 0
+            
+            return jsonify({
+                'status': 'calculating' if is_calculating else 'finished',
+                'company_id': company_id,
+                'is_calculating': is_calculating,
+                'total_brokers': total_brokers,
+                'calculated_points': calculated_points,
+                'completion_percentage': round(completion_percentage, 2),
+                'last_update': last_points_update,
+                'sync_status': company_sync_status.get('status'),
+                'last_sync': company_sync_status.get('last_sync'),
+                'last_sync_start': company_sync_status.get('last_sync_start')
+            })
+        else:
+            # Company not found in sync status, check database directly
+            points_result = supabase.client.table("broker_points").select(
+                "updated_at"
+            ).eq("company_id", company_id).order(
+                "updated_at", desc=True
+            ).limit(1).execute()
+            
+            last_points_update = None
+            if points_result.data:
+                last_points_update = points_result.data[0]['updated_at']
+            
+            # Count total brokers and calculated points
+            brokers_result = supabase.client.table("brokers").select(
+                "id"
+            ).eq("company_id", company_id).execute()
+            
+            points_count_result = supabase.client.table("broker_points").select(
+                "id"
+            ).eq("company_id", company_id).execute()
+            
+            total_brokers = len(brokers_result.data) if brokers_result.data else 0
+            calculated_points = len(points_count_result.data) if points_count_result.data else 0
+            
+            # Calculate completion percentage
+            completion_percentage = (calculated_points / total_brokers * 100) if total_brokers > 0 else 0
+            
+            return jsonify({
+                'status': 'finished',
+                'company_id': company_id,
+                'is_calculating': False,
+                'total_brokers': total_brokers,
+                'calculated_points': calculated_points,
+                'completion_percentage': round(completion_percentage, 2),
+                'last_update': last_points_update
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting broker points status for company {company_id}: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500rs_result.data else 0
+            calculated_points = len(points_count_result.data) if points_count_result.data else 0
+            
             return jsonify({
                 'status': 'success',
                 'company_id': company_id,

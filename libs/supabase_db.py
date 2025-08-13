@@ -739,6 +739,63 @@ class SupabaseClient:
             logger.error(f"Failed to retrieve broker points: {str(e)}")
             raise
 
+    def initialize_broker_points(self, company_id):
+        """
+        Initialize broker points for all brokers in a company
+        """
+        try:
+            logger.info(f"Initializing broker points for company {company_id}")
+            
+            # Get all brokers for this company
+            brokers_result = self.client.table("brokers").select("*").eq("company_id", company_id).execute()
+            
+            if not brokers_result.data:
+                logger.warning(f"No brokers found for company {company_id}")
+                return
+            
+            # Check existing broker points
+            existing_points = self.client.table("broker_points").select("id").eq("company_id", company_id).execute()
+            existing_broker_ids = {point['id'] for point in existing_points.data} if existing_points.data else set()
+            
+            # Initialize points for brokers that don't have records yet
+            points_to_insert = []
+            current_time = datetime.now().isoformat()
+            
+            for broker in brokers_result.data:
+                broker_id = broker['id']
+                if broker_id not in existing_broker_ids:
+                    points_to_insert.append({
+                        'id': broker_id,
+                        'company_id': company_id,
+                        'nome': broker.get('nome', 'Unknown'),
+                        'pontos': 0,
+                        'leads_visitados': 0,
+                        'propostas_enviadas': 0,
+                        'vendas_realizadas': 0,
+                        'leads_perdidos': 0,
+                        'leads_descartados': 0,
+                        'updated_at': current_time
+                    })
+            
+            if points_to_insert:
+                result = self.client.table("broker_points").insert(points_to_insert).execute()
+                if hasattr(result, "error") and result.error:
+                    raise Exception(f"Supabase error: {result.error}")
+                    
+                logger.info(f"Initialized broker points for {len(points_to_insert)} new brokers in company {company_id}")
+            else:
+                logger.info(f"All brokers already have points initialized for company {company_id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize broker points for company {company_id}: {str(e)}")
+            raise
+
+    def update_broker_points(self, brokers=[], leads=[], activities=[], company_id=None):
+        """
+        Alias for upsert_broker_points to maintain compatibility
+        """
+        return self.upsert_broker_points(brokers, leads, activities, company_id)
+
     def upsert_broker_points(self,
                              brokers=[],
                              leads=[],
@@ -923,12 +980,17 @@ class SupabaseClient:
                 )
                 return
 
+            # Use more efficient query to get existing points
             existing_points = self.client.table("broker_points").select(
-                "*").eq("company_id", company_id).execute()
+                "id, pontos, leads_visitados, propostas_enviadas, vendas_realizadas, leads_perdidos, leads_descartados"
+            ).eq("company_id", company_id).execute()
             points_dict = {
                 point['id']: point
                 for point in existing_points.data
             }
+
+            # Initialize batch processing list
+            all_broker_points = []
 
             for _, broker in brokers.iterrows():
                 broker_id = broker['id']
@@ -1016,90 +1078,39 @@ class SupabaseClient:
                     f"📊 broker_points_data FINAL para {broker_name}: {broker_points_data}"
                 )
 
+                # Store data for batch processing
+                all_broker_points.append(broker_points_data)
+
+            # Batch process all broker points for better performance
+            if all_broker_points:
                 try:
-                    existing_check = self.client.table("broker_points").select(
-                        "*").eq("id", broker_id).eq("company_id",
-                                                    company_id).execute()
+                    # Use upsert for batch processing
+                    result = self.client.table("broker_points").upsert(
+                        all_broker_points, on_conflict='id,company_id').execute()
 
-                    if existing_check.data:
-                        existing_data = existing_check.data[0]
-                        update_data = {}
-
-                        for key, new_value in broker_points_data.items():
-                            if key in ['id', 'company_id']:
-                                continue
-
-                            existing_value = existing_data.get(key)
-                            if existing_value != new_value:
-                                if isinstance(existing_value,
-                                              (int, float)) and isinstance(
-                                                  new_value, (int, float)):
-                                    if existing_value != new_value:
-                                        update_data[key] = new_value
-                                else:
-                                    update_data[key] = new_value
-
-                        if update_data:
-                            # Log especial para leads_perdidos
-                            if 'leads_perdidos' in update_data:
-                                logger.info(
-                                    f"🔥 ATUALIZANDO leads_perdidos para {broker_name}: {update_data['leads_perdidos']}"
-                                )
-
-                            result = self.client.table("broker_points").update(
-                                update_data).eq("id", broker_id).eq(
-                                    "company_id", company_id).execute()
-
-                            if hasattr(result, "error") and result.error:
-                                logger.error(
-                                    f"Update error for broker {broker_id}: {result.error}"
-                                )
-                                continue
-
-                            logger.info(
-                                f"Updated {len(update_data)} fields for {broker_name}: {total_points} total points"
-                            )
-
-                            # Verificação adicional para leads_perdidos
-                            if 'leads_perdidos' in update_data:
-                                logger.info(
-                                    f"✅ leads_perdidos atualizado com sucesso: {update_data['leads_perdidos']}"
-                                )
-                        else:
-                            logger.info(
-                                f"No changes detected for {broker_name} - skipping update"
-                            )
+                    if hasattr(result, "error") and result.error:
+                        logger.error(f"Batch upsert error: {result.error}")
+                        # Fallback to individual processing if batch fails
+                        for broker_data in all_broker_points:
+                            try:
+                                individual_result = self.client.table("broker_points").upsert(
+                                    [broker_data], on_conflict='id,company_id').execute()
+                                
+                                if hasattr(individual_result, "error") and individual_result.error:
+                                    logger.error(f"Individual upsert error for broker {broker_data['id']}: {individual_result.error}")
+                            except Exception as individual_error:
+                                logger.error(f"Individual processing error for broker {broker_data['id']}: {individual_error}")
                     else:
-                        # Log especial para leads_perdidos na inserção
-                        if broker_points_data.get('leads_perdidos', 0) > 0:
-                            logger.info(
-                                f"🔥 INSERINDO leads_perdidos para {broker_name}: {broker_points_data['leads_perdidos']}"
-                            )
+                        logger.info(f"Successfully batch processed {len(all_broker_points)} broker points")
+                        
+                        # Log specific info for leads_perdidos
+                        perdidos_count = sum(1 for bp in all_broker_points if bp.get('leads_perdidos', 0) > 0)
+                        if perdidos_count > 0:
+                            logger.info(f"✅ {perdidos_count} brokers with leads_perdidos updated in batch")
 
-                        result = self.client.table("broker_points").insert(
-                            broker_points_data).execute()
-
-                        if hasattr(result, "error") and result.error:
-                            logger.error(
-                                f"Insert error for broker {broker_id}: {result.error}"
-                            )
-                            continue
-
-                        logger.info(
-                            f"Inserted new record for {broker_name}: {total_points} total points"
-                        )
-
-                        # Verificação adicional para leads_perdidos na inserção
-                        if broker_points_data.get('leads_perdidos', 0) > 0:
-                            logger.info(
-                                f"✅ leads_perdidos inserido com sucesso: {broker_points_data['leads_perdidos']}"
-                            )
-
-                except Exception as db_error:
-                    logger.error(
-                        f"Database error for broker {broker_id}: {str(db_error)}"
-                    )
-                    continue
+                except Exception as batch_error:
+                    logger.error(f"Batch processing error: {str(batch_error)}")
+                    # Continue without failing the entire process
 
             logger.info("Broker points calculation completed successfully")
 
