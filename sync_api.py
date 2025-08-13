@@ -829,6 +829,78 @@ def reset_sync_timestamp(company_id):
         }), 500
 
 
+@app.route('/debug-events/<company_id>')
+def debug_events(company_id):
+    """Debug endpoint to test event fetching directly"""
+    try:
+        # Find company config
+        company_config = next(
+            (c for c in COMPANY_LIST if str(c['company_id']) == company_id), None)
+        if not company_config:
+            return jsonify({
+                'status': 'error',
+                'message': f'Company {company_id} not found'
+            }), 404
+            
+        # Initialize API
+        from libs.kommo_api import KommoAPI
+        kommo_api = KommoAPI(api_config=company_config, supabase_client=supabase)
+        
+        # Get parameters from request
+        event_type = request.args.get('type', 'outgoing_chat_message')
+        from_timestamp = request.args.get('from', None)
+        
+        if from_timestamp:
+            try:
+                from_timestamp = int(from_timestamp)
+            except ValueError:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid timestamp format'
+                }), 400
+        else:
+            # Use last 24 hours
+            from datetime import datetime, timezone, timedelta
+            from_timestamp = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp())
+        
+        # Test API call directly
+        params = {
+            "page": 1,
+            "limit": 50,
+            "filter[entity]": "lead",
+            "filter[type]": event_type,
+            "filter[created_at][from]": from_timestamp,
+            "order[created_at]": "desc"
+        }
+        
+        response = kommo_api._make_request("events", params=params)
+        
+        events_count = 0
+        if response and response.get("_embedded") and response["_embedded"].get("events"):
+            events_count = len(response["_embedded"]["events"])
+            
+        return jsonify({
+            'status': 'success',
+            'company_id': company_id,
+            'event_type': event_type,
+            'from_timestamp': from_timestamp,
+            'from_date': datetime.fromtimestamp(from_timestamp, tz=timezone.utc).isoformat(),
+            'api_url': kommo_api.api_url,
+            'params': params,
+            'events_found': events_count,
+            'raw_response_keys': list(response.keys()) if response else None,
+            'has_embedded': bool(response and response.get("_embedded")),
+            'has_events': bool(response and response.get("_embedded") and response["_embedded"].get("events"))
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in debug endpoint: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     # Ensure webhook table exists
     supabase.ensure_webhook_table()

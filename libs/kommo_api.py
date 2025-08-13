@@ -281,10 +281,23 @@ class KommoAPI:
                 if result.data and result.data[0].get('last_sync'):
                     last_sync_str = result.data[0]['last_sync']
                     try:
-                        last_sync_date = datetime.fromisoformat(
-                            last_sync_str.replace('Z', '+00:00'))
+                        # Handle both ISO format and timezone-aware strings
+                        if 'T' in last_sync_str:
+                            if last_sync_str.endswith('Z'):
+                                last_sync_date = datetime.fromisoformat(last_sync_str.replace('Z', '+00:00'))
+                            elif '+' in last_sync_str or last_sync_str.endswith('UTC'):
+                                last_sync_date = datetime.fromisoformat(last_sync_str.replace('UTC', '+00:00'))
+                            else:
+                                # Assume UTC if no timezone info
+                                last_sync_date = datetime.fromisoformat(last_sync_str).replace(tzinfo=timezone.utc)
+                        else:
+                            # Handle timestamp format
+                            last_sync_date = datetime.fromtimestamp(float(last_sync_str), tz=timezone.utc)
                         
-                        # Ensure the date is not in the future
+                        # Ensure the date is timezone-aware and not in the future
+                        if last_sync_date.tzinfo is None:
+                            last_sync_date = last_sync_date.replace(tzinfo=timezone.utc)
+                            
                         now = datetime.now(timezone.utc)
                         if last_sync_date > now:
                             logger.warning(
@@ -299,7 +312,7 @@ class KommoAPI:
                         )
                         return int(from_dt.timestamp())
                     except Exception as parse_error:
-                        logger.error(f"Error parsing last_sync date: {parse_error}")
+                        logger.error(f"Error parsing last_sync date '{last_sync_str}': {parse_error}")
                         # Fall through to fallback logic
                 else:
                     logger.info("No last_sync found in database")
@@ -796,6 +809,14 @@ class KommoAPI:
             for event_type in requested_event_types:
                 logger.info(
                     f"Fetching type='{event_type}' from {from_timestamp}")
+                
+                # Special debugging for outgoing_chat_message
+                if event_type == "outgoing_chat_message":
+                    from_dt = datetime.fromtimestamp(from_timestamp, tz=timezone.utc) if from_timestamp else None
+                    logger.info(
+                        f"DEBUG outgoing_chat_message: timestamp={from_timestamp}, date={from_dt}, company_id={company_id}"
+                    )
+                
                 page = 1
                 while page <= max_pages:
                     params = {
@@ -808,6 +829,10 @@ class KommoAPI:
                     if from_timestamp:
                         params["filter[created_at][from]"] = from_timestamp
                     params["order[created_at]"] = "desc"
+                    
+                    # Debug logging for outgoing_chat_message
+                    if event_type == "outgoing_chat_message":
+                        logger.info(f"DEBUG outgoing_chat_message params: {params}")
 
                     try:
                         resp = self._make_request("events", params=params)
@@ -821,6 +846,19 @@ class KommoAPI:
                         page += 1
                         time.sleep(limits.get("delay_between_pages", 0.3))
                         continue
+
+                    # Handle None response (204 No Content) - but continue for first few pages
+                    if resp is None:
+                        logger.info(
+                            f"{event_type} page {page}: received 204 No Content")
+                        if page <= 2:  # Continue for first 2 pages in case of temporary 204
+                            logger.info(f"Continuing pagination for {event_type} despite 204 on page {page}")
+                            page += 1
+                            time.sleep(limits.get("delay_between_pages", 0.3))
+                            continue
+                        else:
+                            logger.info(f"{event_type}: stopping pagination due to 204")
+                            break
 
                     if not isinstance(resp, dict) or not resp.get("_embedded"):
                         logger.info(
