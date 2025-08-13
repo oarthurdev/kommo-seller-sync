@@ -985,9 +985,6 @@ def debug_events(company_id):
 
 
 if __name__ == '__main__':
-    # Ensure webhook table exists
-    supabase.ensure_webhook_table()
-
     # Start global sync manager in background
     global_manager_thread = threading.Thread(target=global_sync_manager,
                                              name="global_sync_manager",
