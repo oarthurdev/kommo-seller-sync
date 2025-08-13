@@ -927,6 +927,71 @@ def reset_sync_timestamp(company_id):
         }), 500
 
 
+@app.route('/recalculate-broker-points/<company_id>', methods=['POST'])
+def recalculate_broker_points(company_id):
+    """Recalculate broker points immediately when ranking_metrics filters change"""
+    try:
+        logger.info(f"Received request to recalculate broker points for company {company_id}")
+        
+        # Validate company exists
+        company_config = next(
+            (c for c in COMPANY_LIST if str(c['company_id']) == company_id), None)
+        if not company_config:
+            return jsonify({
+                'status': 'error',
+                'message': f'Company {company_id} not found'
+            }), 404
+        
+        # Get latest data from database for points calculation
+        brokers_result = supabase.client.table("brokers").select("*").eq(
+            "company_id", company_id
+        ).eq("cargo", "Corretor").execute()
+        
+        leads_result = supabase.client.table("leads").select("*").eq(
+            "company_id", company_id
+        ).execute()
+        
+        activities_result = supabase.client.table("activities").select("*").eq(
+            "company_id", company_id
+        ).execute()
+        
+        # Convert to DataFrames
+        brokers_df = pd.DataFrame(brokers_result.data) if brokers_result.data else pd.DataFrame()
+        leads_df = pd.DataFrame(leads_result.data) if leads_result.data else pd.DataFrame()
+        activities_df = pd.DataFrame(activities_result.data) if activities_result.data else pd.DataFrame()
+        
+        logger.info(f"Data loaded - Brokers: {len(brokers_df)}, Leads: {len(leads_df)}, Activities: {len(activities_df)}")
+        
+        # Execute broker points calculation with current filter settings
+        supabase.upsert_broker_points(
+            brokers=brokers_df,
+            leads=leads_df,
+            activities=activities_df,
+            company_id=company_id
+        )
+        
+        logger.info(f"Broker points recalculated successfully for company {company_id}")
+        
+        return jsonify({
+            'status': 'success',
+            'company_id': company_id,
+            'message': 'Broker points recalculated successfully',
+            'data_summary': {
+                'brokers_processed': len(brokers_df),
+                'leads_count': len(leads_df),
+                'activities_count': len(activities_df)
+            },
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error recalculating broker points for company {company_id}: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
 @app.route('/debug-events/<company_id>')
 def debug_events(company_id):
     """Debug endpoint to test event fetching directly"""
