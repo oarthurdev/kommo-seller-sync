@@ -3,3 +3,4 @@ venv/
 .vscode/
 flask_server/__pycache__
 libs/__pycache__
+sync_logs.txt
