@@ -309,7 +309,7 @@ Para contribuir com o projeto:
 
 ## 📄 Licença
 
-Este projeto está sob licença [especificar licença].
+Este projeto está sob licença da [MIT License](./LICENSE)
 
 ## 📞 Suporte
 
