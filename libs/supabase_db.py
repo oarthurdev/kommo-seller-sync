@@ -1086,7 +1086,7 @@ class SupabaseClient:
                 try:
                     # Use upsert for batch processing
                     result = self.client.table("broker_points").upsert(
-                        all_broker_points, on_conflict='id,company_id').execute()
+                        all_broker_points, on_conflict='id').execute()
 
                     if hasattr(result, "error") and result.error:
                         logger.error(f"Batch upsert error: {result.error}")
@@ -1094,7 +1094,7 @@ class SupabaseClient:
                         for broker_data in all_broker_points:
                             try:
                                 individual_result = self.client.table("broker_points").upsert(
-                                    [broker_data], on_conflict='id,company_id').execute()
+                                    [broker_data], on_conflict='id').execute()
                                 
                                 if hasattr(individual_result, "error") and individual_result.error:
                                     logger.error(f"Individual upsert error for broker {broker_data['id']}: {individual_result.error}")
