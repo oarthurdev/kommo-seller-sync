@@ -7,6 +7,7 @@ import time
 import logging
 import pytz
 from dateutil import parser
+from .file_logger import sync_file_logger
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,6 +131,9 @@ class KommoAPI:
 
                 # Usa o novo handler de erros específicos da Kommo
                 if status_code in (429, 403, 504):
+                    company_id = getattr(self, 'api_config', {}).get('company_id', 'unknown')
+                    sync_file_logger.log_api_error(company_id, endpoint, status_code, attempt)
+                    
                     if not self.rate_monitor.handle_kommo_error(
                             status_code, endpoint, attempt):
                         logger.error(

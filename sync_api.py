@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from libs.supabase_db import SupabaseClient
 from libs.kommo_api import KommoAPI
 from libs.sync_manager import SyncManager
+from libs.file_logger import sync_file_logger
 
 # Configure logging
 logging.basicConfig(
@@ -64,6 +65,7 @@ def continuous_sync_worker(company_id, config):
 
     try:
         logger.info(f"[{company_id}] Starting continuous sync worker")
+        sync_file_logger.log_system_event("WORKER_START", f"Continuous sync worker started", company_id)
 
         # Inicializar componentes
         kommo_api = KommoAPI(api_config=config, supabase_client=local_supabase)
@@ -88,16 +90,18 @@ def continuous_sync_worker(company_id, config):
             cycle_start = time.time()
 
             try:
+                cycle_start_time = datetime.now()
                 sync_status[company_id].update({
                     'status':
                     'syncing',
                     'last_sync_start':
-                    datetime.now()
+                    cycle_start_time
                 })
 
                 logger.info(
                     f"[{company_id}] Starting sync cycle #{sync_status[company_id]['total_syncs'] + 1}"
                 )
+                sync_file_logger.log_sync_start(company_id, "incremental")
 
                 # Fetch data with appropriate strategy
                 logger.info(f"[{company_id}] Fetching active users...")
@@ -148,6 +152,7 @@ def continuous_sync_worker(company_id, config):
                 logger.info(
                     f"[{company_id}] Data volumes - Brokers: {len(brokers)}, Leads: {len(df_leads)}, Activities: {len(activities)}, Stages: {len(df_stages)}"
                 )
+                sync_file_logger.log_data_volume(company_id, len(brokers), len(df_leads), len(activities), len(df_stages))
 
                 # Log sample IDs for debugging
                 if not df_leads.empty:
@@ -190,6 +195,7 @@ def continuous_sync_worker(company_id, config):
                             logger.info(
                                 f"[{company_id}] Broker points updated for {len(broker_data)} brokers"
                             )
+                            sync_file_logger.log_broker_points_update(company_id, len(broker_data), len(df_leads))
                         else:
                             logger.warning(
                                 f"[{company_id}] No brokers with 'Corretor' role found"
@@ -228,9 +234,11 @@ def continuous_sync_worker(company_id, config):
                 })
 
                 cycle_duration = time.time() - cycle_start
+                cycle_duration_ms = int(cycle_duration * 1000)
                 logger.info(
                     f"[{company_id}] Sync completed in {cycle_duration:.2f}s. Next sync in {sync_interval}s"
                 )
+                sync_file_logger.log_sync_complete(company_id, changes_detected, cycle_duration_ms)
 
                 # Intelligent waiting with health checks
                 wait_time = 0
@@ -261,6 +269,7 @@ def continuous_sync_worker(company_id, config):
                 logger.error(
                     f"[{company_id}] Sync error (attempt {consecutive_errors}): {e}"
                 )
+                sync_file_logger.log_sync_error(company_id, str(e))
 
                 # Exponential backoff for errors
                 error_delay = min(
@@ -733,6 +742,12 @@ def webhook():
                 f"Message linked to broker: {linked_record['broker_id']}")
         if linked_record.get('lead_id'):
             logger.info(f"Message linked to lead: {linked_record['lead_id']}")
+        
+        # Log webhook to file only for important types
+        if webhook_type in ['outgoing_chat_message', 'lead_status_changed', 'entity_responsible_changed']:
+            company_info = linked_record.get('broker_id', 'unknown')
+            sync_file_logger.log_webhook_received(webhook_type, linked_record.get('payload_id'), company_info)
+        
         logger.info(f"=== WEBHOOK PROCESSING COMPLETE ===")
         return jsonify({'status': 'success'})
 
@@ -1072,6 +1087,7 @@ if __name__ == '__main__':
                                              daemon=True)
     global_manager_thread.start()
     logger.info("Global sync manager started")
+    sync_file_logger.log_system_event("STARTUP", "Continuous Sync API started - Global sync manager initialized")
 
     # Start Flask app
     logger.info("Starting Flask API server on port 5002")
