@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from libs.supabase_db import SupabaseClient
 from libs.kommo_api import KommoAPI
 from libs.sync_manager import SyncManager
-from libs.file_logger import sync_file_logger
+from libs.file_logger import SyncFileLogger
 
 # Configure logging
 logging.basicConfig(
@@ -22,6 +22,15 @@ sync_threads = {}
 sync_status = {}
 supabase = SupabaseClient()
 COMPANY_LIST = []
+
+# Global logger instance
+sync_file_logger = SyncFileLogger()
+
+# Test log file on startup
+if sync_file_logger.test_log_file():
+    sync_file_logger.log_system_event("startup", "Sync API started successfully")
+else:
+    print("⚠️  WARNING: Log file is not working properly!")
 
 # Configurações otimizadas para sincronização contínua respeitando 7 req/s
 SYNC_CONFIG = {
@@ -164,8 +173,7 @@ def continuous_sync_worker(company_id, config):
                     valid_activity_lead_ids = activities['lead_id'].dropna(
                     ).head(5).tolist()
                     logger.info(
-                        f"[{company_id}] Sample activity lead_ids: {valid_activity_lead_ids}"
-                    )
+                        f"[{company_id}] Sample activity lead_ids: {valid_activity_lead_ids}")
 
                 # Incremental sync with change detection
                 changes_detected = sync_manager.sync_data_incremental(
@@ -742,12 +750,12 @@ def webhook():
                 f"Message linked to broker: {linked_record['broker_id']}")
         if linked_record.get('lead_id'):
             logger.info(f"Message linked to lead: {linked_record['lead_id']}")
-        
+
         # Log webhook to file only for important types
         if webhook_type in ['outgoing_chat_message', 'lead_status_changed', 'entity_responsible_changed']:
             company_info = linked_record.get('broker_id', 'unknown')
             sync_file_logger.log_webhook_received(webhook_type, linked_record.get('payload_id'), company_info)
-        
+
         logger.info(f"=== WEBHOOK PROCESSING COMPLETE ===")
         return jsonify({'status': 'success'})
 
@@ -815,40 +823,40 @@ def get_broker_points_status(company_id):
         # Check if there's an active sync for this company
         if company_id in sync_status:
             company_sync_status = sync_status[company_id]
-            
+
             # Check if currently calculating points
             is_calculating = (
                 company_sync_status.get('status') == 'syncing' or 
                 company_sync_status.get('last_sync_start') and 
                 not company_sync_status.get('last_sync')
             )
-            
+
             # Get last broker points update timestamp
             points_result = supabase.client.table("broker_points").select(
                 "updated_at"
             ).eq("company_id", company_id).order(
                 "updated_at", desc=True
             ).limit(1).execute()
-            
+
             last_points_update = None
             if points_result.data:
                 last_points_update = points_result.data[0]['updated_at']
-            
+
             # Count total brokers and calculated points
             brokers_result = supabase.client.table("brokers").select(
                 "id"
             ).eq("company_id", company_id).execute()
-            
+
             points_count_result = supabase.client.table("broker_points").select(
                 "id"
             ).eq("company_id", company_id).execute()
-            
+
             total_brokers = len(brokers_result.data) if brokers_result.data else 0
             calculated_points = len(points_count_result.data) if points_count_result.data else 0
-            
+
             # Calculate completion percentage
             completion_percentage = (calculated_points / total_brokers * 100) if total_brokers > 0 else 0
-            
+
             return jsonify({
                 'status': 'calculating' if is_calculating else 'finished',
                 'company_id': company_id,
@@ -868,26 +876,26 @@ def get_broker_points_status(company_id):
             ).eq("company_id", company_id).order(
                 "updated_at", desc=True
             ).limit(1).execute()
-            
+
             last_points_update = None
             if points_result.data:
                 last_points_update = points_result.data[0]['updated_at']
-            
+
             # Count total brokers and calculated points
             brokers_result = supabase.client.table("brokers").select(
                 "id"
             ).eq("company_id", company_id).execute()
-            
+
             points_count_result = supabase.client.table("broker_points").select(
                 "id"
             ).eq("company_id", company_id).execute()
-            
+
             total_brokers = len(brokers_result.data) if brokers_result.data else 0
             calculated_points = len(points_count_result.data) if points_count_result.data else 0
-            
+
             # Calculate completion percentage
             completion_percentage = (calculated_points / total_brokers * 100) if total_brokers > 0 else 0
-            
+
             return jsonify({
                 'status': 'finished',
                 'company_id': company_id,
@@ -897,7 +905,7 @@ def get_broker_points_status(company_id):
                 'completion_percentage': round(completion_percentage, 2),
                 'last_update': last_points_update
             })
-            
+
     except Exception as e:
         logger.error(f"Error getting broker points status for company {company_id}: {str(e)}")
         return jsonify({
@@ -911,22 +919,22 @@ def reset_sync_timestamp(company_id):
     """Reset last_sync timestamp to start fresh sync"""
     try:
         from datetime import datetime, timezone, timedelta
-        
+
         # Set last_sync to 7 days ago to avoid overload
         reset_date = datetime.now(timezone.utc) - timedelta(days=7)
-        
+
         result = supabase.client.table("kommo_config").update({
             "last_sync": reset_date.isoformat()
         }).eq("company_id", company_id).eq("active", True).execute()
-        
+
         if hasattr(result, "error") and result.error:
             return jsonify({
                 'status': 'error',
                 'message': f"Database error: {result.error}"
             }), 500
-            
+
         logger.info(f"Reset last_sync for company {company_id} to {reset_date.isoformat()}")
-        
+
         return jsonify({
             'status': 'success',
             'company_id': company_id,
@@ -947,7 +955,7 @@ def recalculate_broker_points(company_id):
     """Recalculate broker points immediately when ranking_metrics filters change"""
     try:
         logger.info(f"Received request to recalculate broker points for company {company_id}")
-        
+
         # Validate company exists
         company_config = next(
             (c for c in COMPANY_LIST if str(c['company_id']) == company_id), None)
@@ -956,27 +964,27 @@ def recalculate_broker_points(company_id):
                 'status': 'error',
                 'message': f'Company {company_id} not found'
             }), 404
-        
+
         # Get latest data from database for points calculation
         brokers_result = supabase.client.table("brokers").select("*").eq(
             "company_id", company_id
         ).eq("cargo", "Corretor").execute()
-        
+
         leads_result = supabase.client.table("leads").select("*").eq(
             "company_id", company_id
         ).execute()
-        
+
         activities_result = supabase.client.table("activities").select("*").eq(
             "company_id", company_id
         ).execute()
-        
+
         # Convert to DataFrames
         brokers_df = pd.DataFrame(brokers_result.data) if brokers_result.data else pd.DataFrame()
         leads_df = pd.DataFrame(leads_result.data) if leads_result.data else pd.DataFrame()
         activities_df = pd.DataFrame(activities_result.data) if activities_result.data else pd.DataFrame()
-        
+
         logger.info(f"Data loaded - Brokers: {len(brokers_df)}, Leads: {len(leads_df)}, Activities: {len(activities_df)}")
-        
+
         # Execute broker points calculation with current filter settings
         supabase.upsert_broker_points(
             brokers=brokers_df,
@@ -984,9 +992,9 @@ def recalculate_broker_points(company_id):
             activities=activities_df,
             company_id=company_id
         )
-        
+
         logger.info(f"Broker points recalculated successfully for company {company_id}")
-        
+
         return jsonify({
             'status': 'success',
             'company_id': company_id,
@@ -998,7 +1006,7 @@ def recalculate_broker_points(company_id):
             },
             'timestamp': datetime.now().isoformat()
         })
-        
+
     except Exception as e:
         logger.error(f"Error recalculating broker points for company {company_id}: {str(e)}")
         return jsonify({
@@ -1019,15 +1027,15 @@ def debug_events(company_id):
                 'status': 'error',
                 'message': f'Company {company_id} not found'
             }), 404
-            
+
         # Initialize API
         from libs.kommo_api import KommoAPI
         kommo_api = KommoAPI(api_config=company_config, supabase_client=supabase)
-        
+
         # Get parameters from request
         event_type = request.args.get('type', 'outgoing_chat_message')
         from_timestamp = request.args.get('from', None)
-        
+
         if from_timestamp:
             try:
                 from_timestamp = int(from_timestamp)
@@ -1040,7 +1048,7 @@ def debug_events(company_id):
             # Use last 24 hours
             from datetime import datetime, timezone, timedelta
             from_timestamp = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp())
-        
+
         # Test API call directly
         params = {
             "page": 1,
@@ -1050,13 +1058,13 @@ def debug_events(company_id):
             "filter[created_at][from]": from_timestamp,
             "order[created_at]": "desc"
         }
-        
+
         response = kommo_api._make_request("events", params=params)
-        
+
         events_count = 0
         if response and response.get("_embedded") and response["_embedded"].get("events"):
             events_count = len(response["_embedded"]["events"])
-            
+
         from datetime import datetime, timezone
         return jsonify({
             'status': 'success',
@@ -1071,7 +1079,7 @@ def debug_events(company_id):
             'has_embedded': bool(response and response.get("_embedded")),
             'has_events': bool(response and response.get("_embedded") and response["_embedded"].get("events"))
         })
-        
+
     except Exception as e:
         logger.error(f"Error in debug endpoint: {str(e)}")
         return jsonify({
