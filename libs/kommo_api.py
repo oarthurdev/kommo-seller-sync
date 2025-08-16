@@ -335,11 +335,12 @@ class KommoAPI:
                 f"Error fallback: syncing last 24 hours from: {fallback_date}")
             return int(fallback_date.timestamp())
 
-    def get_stages_list(self, company_id=None):
+    def get_stages_list(self, company_id=None, active_only=True):
         """
         Retrieve stages from specific pipelines in Kommo CRM
         Args:
             company_id (str): Optional company ID to filter stages
+            active_only (bool): If True, only return active users (default: True)
         """
         try:
             logger.info("Retrieving ALL stages from Kommo CRM")

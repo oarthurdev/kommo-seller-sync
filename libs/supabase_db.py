@@ -790,17 +790,18 @@ class SupabaseClient:
             logger.error(f"Failed to initialize broker points for company {company_id}: {str(e)}")
             raise
 
-    def update_broker_points(self, brokers=[], leads=[], activities=[], company_id=None):
+    def update_broker_points(self, brokers=[], leads=[], activities=[], company_id=None, stages=[]):
         """
         Alias for upsert_broker_points to maintain compatibility
         """
-        return self.upsert_broker_points(brokers, leads, activities, company_id)
+        return self.upsert_broker_points(brokers, leads, activities, company_id, stages)
 
     def upsert_broker_points(self,
                              brokers=[],
                              leads=[],
                              activities=[],
-                             company_id=None):
+                             company_id=None,
+                             stages=[]):
         try:
             company_id = company_id or self.kommo_config.get('company_id')
             logger.info(
@@ -827,6 +828,13 @@ class SupabaseClient:
                         activities) > 0 else pd.DataFrame()
                 else:
                     activities = pd.DataFrame()
+
+            if not isinstance(stages, pd.DataFrame):
+                if isinstance(stages, list):
+                    stages = pd.DataFrame(stages) if len(
+                        stages) > 0 else pd.DataFrame()
+                else:
+                    stages = pd.DataFrame()
 
             # Get date filter from component_filters table
             date_filter_start = None
@@ -1016,7 +1024,7 @@ class SupabaseClient:
                         count = self._calculate_rule_points(
                             rule_name, rule_config, broker_leads,
                             broker_activities, leads, activities, company_id,
-                            broker_id)
+                            broker_id, stages)
                         rule_results[rule_name] = count
 
                         points_per_occurrence = rule_config.get(
@@ -1591,7 +1599,8 @@ class SupabaseClient:
                                all_leads,
                                all_activities,
                                company_id,
-                               broker_id=None):
+                               broker_id=None,
+                               stages=None):
         """Calculate count for a specific rule - returns the number of occurrences, not points"""
         try:
             # Ensure datetime columns are properly converted with better error handling
@@ -1633,13 +1642,18 @@ class SupabaseClient:
                     )
                     return 0
 
-                visits = broker_activities[
-                    (broker_activities.get('tipo', '') == 'mudança_status')
-                    & (broker_activities.get('status_novo',
-                                             pd.Series()).notna())]
-                unique_leads_visited = visits['lead_id'].nunique(
-                ) if not visits.empty else 0
-                return unique_leads_visited
+                visita_stage_ids = stages[stages['stage_name'].str.contains('visita', case=False)]['stage_id']
+
+                    # Filtra as atividades onde o tipo é 'mudança_status' e status_novo corresponde a um desses stage_id
+                status_visitas = broker_activities[
+                    (broker_activities.get('tipo', '') == 'mudança_status') &
+                    (broker_activities.get('status_novo').isin(visita_stage_ids))
+                ]
+
+                # Conta o número único de leads nessas atividades
+                unique_visitas = status_visitas['lead_id'].nunique() if not status_visitas.empty else 0
+
+                return unique_visitas
 
             elif rule_name == "propostas_enviadas":
                 # Propostas enviadas - usando mudanças para status específico ou notas (já filtradas por data)
@@ -1654,25 +1668,20 @@ class SupabaseClient:
                     return 0
 
                 try:
-                    # Buscar por mudanças de status para "Proposta" ou notas contendo "proposta"
+                    # Filtra apenas os stage_id cujo stage_name contenha 'proposta'
+                    proposal_stage_ids = stages[stages['stage_name'].str.contains('proposta', case=False)]['stage_id']
+
+                    # Filtra as atividades onde o tipo é 'mudança_status' e status_novo corresponde a um desses stage_id
                     status_proposals = broker_activities[
-                        (broker_activities.get('tipo', '') == 'mudança_status')
-                        & (broker_activities.get('valor_novo', pd.Series()).
-                           astype(str).str.contains(
-                               'proposta', case=False, na=False))]
+                        (broker_activities.get('tipo', '') == 'mudança_status') &
+                        (broker_activities.get('status_novo').isin(proposal_stage_ids))
+                    ]
 
-                    note_proposals = broker_activities[
-                        (broker_activities.get('tipo', '') == 'nota_adicionada'
-                         ) & (broker_activities.get('texto_mensagem',
-                                                    pd.Series()).astype(str).
-                              str.contains('proposta', case=False, na=False))]
+                    # Conta o número único de leads nessas atividades
+                    unique_proposals = status_proposals['lead_id'].nunique() if not status_proposals.empty else 0
 
-                    proposal_activities = pd.concat(
-                        [status_proposals, note_proposals],
-                        ignore_index=True).drop_duplicates()
-                    unique_proposals = proposal_activities['lead_id'].nunique(
-                    ) if not proposal_activities.empty else 0
                     return unique_proposals
+
                 except Exception as e:
                     logger.warning(
                         f"Error in propostas_enviadas calculation: {e}")
