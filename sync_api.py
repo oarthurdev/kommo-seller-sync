@@ -195,24 +195,11 @@ def continuous_sync_worker(company_id, config):
                             & (brokers['company_id'] == company_id)].copy()
 
                         if not broker_data.empty:
-                            params = {
-                                'brokers': broker_data,
-                                'leads': df_leads,
-                                'activities': activities,
-                                'company_id': company_id
-                            }
-
-                            # Verifica se existem pelo menos 2 pipeline_id iguais entre df_leads e df_stages
-                            leads_pipelines = set(df_leads['pipeline_id'].unique())
-                            stages_pipelines = set(df_stages['pipeline_id'].unique())
-
-                            matching_pipelines = leads_pipelines.intersection(stages_pipelines)
-
-                            if matching_pipelines:
-                                params['stages'] = df_stages
-
-                            # Chama a função com os parâmetros montados
-                            local_supabase.update_broker_points(**params)
+                            local_supabase.update_broker_points(
+                                brokers=broker_data,
+                                leads=df_leads,
+                                activities=activities,
+                                company_id=company_id)
                             
                             logger.info(
                                 f"[{company_id}] Broker points updated for {len(broker_data)} brokers"

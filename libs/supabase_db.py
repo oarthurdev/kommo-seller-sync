@@ -790,18 +790,17 @@ class SupabaseClient:
             logger.error(f"Failed to initialize broker points for company {company_id}: {str(e)}")
             raise
 
-    def update_broker_points(self, brokers=[], leads=[], activities=[], company_id=None, stages=[]):
+    def update_broker_points(self, brokers=[], leads=[], activities=[], company_id=None):
         """
         Alias for upsert_broker_points to maintain compatibility
         """
-        return self.upsert_broker_points(brokers, leads, activities, company_id, stages)
+        return self.upsert_broker_points(brokers, leads, activities, company_id)
 
     def upsert_broker_points(self,
                              brokers=[],
                              leads=[],
                              activities=[],
-                             company_id=None,
-                             stages=[]):
+                             company_id=None):
         try:
             company_id = company_id or self.kommo_config.get('company_id')
             logger.info(
@@ -828,13 +827,6 @@ class SupabaseClient:
                         activities) > 0 else pd.DataFrame()
                 else:
                     activities = pd.DataFrame()
-
-            if not isinstance(stages, pd.DataFrame):
-                if isinstance(stages, list):
-                    stages = pd.DataFrame(stages) if len(
-                        stages) > 0 else pd.DataFrame()
-                else:
-                    stages = pd.DataFrame()
 
             # Get date filter from component_filters table
             date_filter_start = None
@@ -1019,29 +1011,119 @@ class SupabaseClient:
                 logger.info(f"  - {len(broker_leads)} leads")
                 logger.info(f"  - {len(broker_activities)} activities")
 
+                # ===== Cálculo especial: leads_visitados e propostas_enviadas =====
+                def _compute_visitas_propostas(broker_leads_df, broker_acts_df, stages_df, company_id):
+                    if broker_leads_df.empty or broker_acts_df.empty or stages_df.empty:
+                        return 0, 0
+
+                    # Filtrar stages pelo company_id (se existir a coluna)
+                    if 'company_id' in stages_df.columns:
+                        stages_use = stages_df[stages_df['company_id'] == company_id].copy()
+                    else:
+                        stages_use = stages_df.copy()
+
+                    # Garantir colunas esperadas
+                    needed_stage_cols = {'stage_id', 'stage_name', 'pipeline_id'}
+                    if not needed_stage_cols.issubset(set(stages_use.columns)):
+                        return 0, 0
+
+                    # Join activities -> stages (status_novo == stage_id)
+                    m1 = broker_acts_df.merge(
+                        stages_use[['stage_id', 'stage_name', 'pipeline_id']],
+                        left_on='status_novo',
+                        right_on='stage_id',
+                        how='inner'
+                    )
+
+                    if m1.empty:
+                        return 0, 0
+
+                    # Join com leads do corretor (lead_id == id)
+                    needed_lead_cols = {'id', 'pipeline_id', 'company_id'}
+                    lead_cols_present = [c for c in needed_lead_cols if c in broker_leads_df.columns]
+                    leads_use = broker_leads_df[lead_cols_present].copy()
+
+                    m2 = m1.merge(
+                        leads_use,
+                        left_on='lead_id',
+                        right_on='id',
+                        how='inner',
+                        suffixes=('_stage', '_lead')
+                    )
+
+                    if m2.empty:
+                        return 0, 0
+
+                    # Garantir company_id do lead correto
+                    if 'company_id' in m2.columns:
+                        m2 = m2[m2['company_id'] == company_id]
+                        if m2.empty:
+                            return 0, 0
+
+                    # Exigir pipeline_id iguais (stage == lead)
+                    if 'pipeline_id_stage' in m2.columns and 'pipeline_id_lead' in m2.columns:
+                        m2 = m2[m2['pipeline_id_stage'] == m2['pipeline_id_lead']]
+                    else:
+                        # fallback para nomes sem sufixo (se merge não criou)
+                        if 'pipeline_id_x' in m2.columns and 'pipeline_id_y' in m2.columns:
+                            m2 = m2[m2['pipeline_id_x'] == m2['pipeline_id_y']]
+                        elif 'pipeline_id' in m2.columns:
+                            # quando só existe uma coluna, não dá pra garantir igualdade → não conta
+                            return 0, 0
+
+                    if m2.empty:
+                        return 0, 0
+
+                    # Contagens (leads únicos) por palavra-chave no stage_name
+                    stage_col = 'stage_name'
+                    if stage_col not in m2.columns:
+                        return 0, 0
+
+                    visitas_leads = m2[m2[stage_col].str.contains('visita', case=False, na=False)]['id'].nunique()
+                    propostas_leads = m2[m2[stage_col].str.contains('proposta', case=False, na=False)]['id'].nunique()
+                    return visitas_leads, propostas_leads
+
+                # Carregar estágios (stages) da empresa do banco de dados
+                try:
+                    stages_result = self.client.table("stages_list").select("*").eq("company_id", company_id).execute()
+                    if stages_result.data:
+                        stages = pd.DataFrame(stages_result.data)
+                    else:
+                        stages = pd.DataFrame()
+                except Exception as e:
+                    logger.error(f"Erro ao carregar stages: {e}")
+                    stages = pd.DataFrame()
+
+                # Calcula visitas/propostas com as novas regras
+                visitas_count, propostas_count = _compute_visitas_propostas(
+                    broker_leads, broker_activities, stages, company_id
+                )
+
+                # ===== Loop de regras, COM override para as duas regras especiais =====
+                rule_results = {}
+                total_points = 0
                 for rule_name, rule_config in rules.items():
                     try:
-                        count = self._calculate_rule_points(
-                            rule_name, rule_config, broker_leads,
-                            broker_activities, leads, activities, company_id,
-                            broker_id, stages)
-                        rule_results[rule_name] = count
+                        if rule_name in ('leads_visitados', 'propostas_enviadas'):
+                            count = visitas_count if rule_name == 'leads_visitados' else propostas_count
+                        else:
+                            count = self._calculate_rule_points(
+                                rule_name, rule_config, broker_leads,
+                                broker_activities, leads, activities, company_id,
+                                broker_id
+                            )
 
-                        points_per_occurrence = rule_config.get(
-                            'pontos', 0) if isinstance(rule_config,
-                                                       dict) else rule_config
-                        rule_points = count * points_per_occurrence
-                        total_points += rule_points
+                        rule_results[rule_name] = count
+                        points_per_occurrence = rule_config.get('pontos', 0) if isinstance(rule_config, dict) else rule_config
+                        total_points += count * points_per_occurrence
 
                         if count > 0:
                             logger.info(
-                                f"  - {rule_name}: {count} occurrences × {points_per_occurrence} = {rule_points} points"
+                                f"  - {rule_name}: {count} occurrences × {points_per_occurrence} = {count * points_per_occurrence} points"
                             )
 
                     except Exception as e:
-                        logger.error(
-                            f"Error calculating rule {rule_name} for broker {broker_id}: {str(e)}"
-                        )
+                        logger.error(f"Error calculating rule {rule_name} for broker {broker_id}: {str(e)}")
                         rule_results[rule_name] = 0
 
                 broker_points_data = {
@@ -1599,7 +1681,6 @@ class SupabaseClient:
                                all_leads,
                                all_activities,
                                company_id,
-                               stages,
                                broker_id=None):
         """Calculate count for a specific rule - returns the number of occurrences, not points"""
         try:
@@ -1630,68 +1711,8 @@ class SupabaseClient:
                 )
                 # Continue with original data if conversion fails
 
-            if rule_name == "leads_visitados":
-                # Leads visitados - usando mudanças de status específicas (já filtradas por data)
-                if broker_activities.empty:
-                    return 0
-
-                # Verificar se a coluna lead_id existe nas atividades
-                if 'lead_id' not in broker_activities.columns:
-                    logger.warning(
-                        f"Column 'lead_id' not found in broker_activities for rule {rule_name}"
-                    )
-                    return 0
-
-                visita_stage_ids = stages[stages['stage_name'].str.contains('visita', case=False)]['stage_id']
-
-                if visita_stage_ids.empty:
-                    logger.warning(f"No stages found for 'visita' in rule {rule_name}")
-                    return 0
-
-                # Filtra as atividades onde o tipo é 'mudança_status' e o status_novo corresponde a um dos stage_id
-                status_visitas = broker_activities[
-                    (broker_activities['tipo'] == 'mudança_status') &
-                    (broker_activities['status_novo'].isin(visita_stage_ids))  # Comparar diretamente com os stage_id
-                ]
-
-                # Conta o número único de leads nessas atividades
-                unique_visitas = status_visitas['lead_id'].nunique() if not status_visitas.empty else 0
-
-                return unique_visitas
-
-            elif rule_name == "propostas_enviadas":
-                # Propostas enviadas - usando mudanças para status específico ou notas (já filtradas por data)
-                if broker_activities.empty:
-                    return 0
-
-                # Verificar se a coluna lead_id existe nas atividades
-                if 'lead_id' not in broker_activities.columns:
-                    logger.warning(
-                        f"Column 'lead_id' not found in broker_activities for rule {rule_name}"
-                    )
-                    return 0
-
-                try:
-                    # Filtra apenas os stage_id cujo stage_name contenha 'proposta'
-                    proposal_stage_ids = stages[stages['stage_name'].str.contains('proposta', case=False)]['stage_id']
-                    
-                    # Filtra as atividades onde o tipo é 'mudança_status' e status_novo corresponde a um desses stage_id
-                    status_proposals = broker_activities[
-                        (broker_activities.get('tipo', '') == 'mudança_status') &
-                        (broker_activities.get('status_novo').isin(proposal_stage_ids))
-                    ]
-
-                    # Conta o número único de leads nessas atividades
-                    unique_proposals = status_proposals['lead_id'].nunique() if not status_proposals.empty else 0
-
-                    return unique_proposals
-
-                except Exception as e:
-                    logger.warning(
-                        f"Error in propostas_enviadas calculation: {e}")
-                    return 0
-
-            elif rule_name == "vendas_realizadas":
+            
+            if rule_name == "vendas_realizadas":
                 # Vendas realizadas - buscar atividades de mudança para status "Ganho" no período filtrado
                 if broker_activities.empty:
                     # Se não há atividades, usar fallback dos leads
