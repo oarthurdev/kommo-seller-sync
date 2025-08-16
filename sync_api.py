@@ -202,11 +202,16 @@ def continuous_sync_worker(company_id, config):
                                 'company_id': company_id
                             }
 
-                            # Condicional para adicionar df_stages somente quando o pipeline_id coincidir
-                            if df_leads.get('pipeline_id') == df_stages.get('pipeline_id'):
+                            # Verifica se existem pelo menos 2 pipeline_id iguais entre df_leads e df_stages
+                            leads_pipelines = set(df_leads['pipeline_id'].unique())
+                            stages_pipelines = set(df_stages['pipeline_id'].unique())
+
+                            matching_pipelines = leads_pipelines.intersection(stages_pipelines)
+
+                            if matching_pipelines:
                                 params['stages'] = df_stages
 
-                            # Chama a função passando os parâmetros
+                            # Chama a função com os parâmetros montados
                             local_supabase.update_broker_points(**params)
                             
                             logger.info(

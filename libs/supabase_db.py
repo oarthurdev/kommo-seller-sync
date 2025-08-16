@@ -1599,8 +1599,8 @@ class SupabaseClient:
                                all_leads,
                                all_activities,
                                company_id,
-                               broker_id=None,
-                               stages=None):
+                               stages,
+                               broker_id=None):
         """Calculate count for a specific rule - returns the number of occurrences, not points"""
         try:
             # Ensure datetime columns are properly converted with better error handling
@@ -1644,10 +1644,14 @@ class SupabaseClient:
 
                 visita_stage_ids = stages[stages['stage_name'].str.contains('visita', case=False)]['stage_id']
 
-                    # Filtra as atividades onde o tipo é 'mudança_status' e status_novo corresponde a um desses stage_id
+                if visita_stage_ids.empty:
+                    logger.warning(f"No stages found for 'visita' in rule {rule_name}")
+                    return 0
+
+                # Filtra as atividades onde o tipo é 'mudança_status' e o status_novo corresponde a um dos stage_id
                 status_visitas = broker_activities[
-                    (broker_activities.get('tipo', '') == 'mudança_status') &
-                    (broker_activities.get('status_novo').isin(visita_stage_ids))
+                    (broker_activities['tipo'] == 'mudança_status') &
+                    (broker_activities['status_novo'].isin(visita_stage_ids))  # Comparar diretamente com os stage_id
                 ]
 
                 # Conta o número único de leads nessas atividades
@@ -1670,7 +1674,7 @@ class SupabaseClient:
                 try:
                     # Filtra apenas os stage_id cujo stage_name contenha 'proposta'
                     proposal_stage_ids = stages[stages['stage_name'].str.contains('proposta', case=False)]['stage_id']
-
+                    
                     # Filtra as atividades onde o tipo é 'mudança_status' e status_novo corresponde a um desses stage_id
                     status_proposals = broker_activities[
                         (broker_activities.get('tipo', '') == 'mudança_status') &
