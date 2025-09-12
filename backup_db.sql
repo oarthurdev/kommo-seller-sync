@@ -1,5 +1,26 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
+CREATE TABLE public.companies (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  subdomain text NOT NULL UNIQUE,
+  created_at timestamp without time zone DEFAULT now(),
+  CONSTRAINT companies_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.brokers (
+  id bigint NOT NULL,
+  nome text NOT NULL,
+  email text,
+  foto_url text,
+  cargo text,
+  criado_em timestamp without time zone,
+  updated_at timestamp without time zone DEFAULT now(),
+  active boolean DEFAULT true,
+  company_id uuid,
+  CONSTRAINT brokers_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_brokers_company FOREIGN KEY (company_id) REFERENCES public.companies(id)
+);
 
 CREATE TABLE public.activities (
   id text NOT NULL,
@@ -46,26 +67,7 @@ CREATE TABLE public.broker_points (
   CONSTRAINT fk_bp_broker FOREIGN KEY (id) REFERENCES public.brokers(id),
   CONSTRAINT fk_bp_company FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
-CREATE TABLE public.brokers (
-  id bigint NOT NULL,
-  nome text NOT NULL,
-  email text,
-  foto_url text,
-  cargo text,
-  criado_em timestamp without time zone,
-  updated_at timestamp without time zone DEFAULT now(),
-  active boolean DEFAULT true,
-  company_id uuid,
-  CONSTRAINT brokers_pkey PRIMARY KEY (id),
-  CONSTRAINT fk_brokers_company FOREIGN KEY (company_id) REFERENCES public.companies(id)
-);
-CREATE TABLE public.companies (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  name text NOT NULL,
-  subdomain text NOT NULL UNIQUE,
-  created_at timestamp without time zone DEFAULT now(),
-  CONSTRAINT companies_pkey PRIMARY KEY (id)
-);
+
 CREATE TABLE public.company_branding (
   id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
   company_id uuid NOT NULL UNIQUE,
@@ -82,6 +84,16 @@ CREATE TABLE public.company_branding (
   CONSTRAINT company_branding_pkey PRIMARY KEY (id),
   CONSTRAINT company_branding_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
+CREATE TABLE public.rules (
+  id SERIAL PRIMARY KEY,
+  nome text NOT NULL,
+  pontos integer NOT NULL,
+  coluna_nome text NOT NULL UNIQUE,
+  created_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT now(),
+  descricao text
+);
+
 CREATE TABLE public.company_rules (
   id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
   company_id uuid NOT NULL,
@@ -95,7 +107,7 @@ CREATE TABLE public.company_rules (
   CONSTRAINT company_rules_company_id_companies_id_fk FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
 CREATE TABLE public.component_filters (
-  id integer NOT NULL DEFAULT nextval('component_filters_id_seq'::regclass),
+  id SERIAL PRIMARY KEY,
   company_id uuid NOT NULL,
   component_name character varying NOT NULL,
   filter_type character varying NOT NULL,
@@ -105,7 +117,6 @@ CREATE TABLE public.component_filters (
   updated_at timestamp without time zone DEFAULT now(),
   month integer,
   year integer,
-  CONSTRAINT component_filters_pkey PRIMARY KEY (id),
   CONSTRAINT fk_component_company FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
 CREATE TABLE public.custom_rules (
@@ -118,11 +129,10 @@ CREATE TABLE public.custom_rules (
   active boolean DEFAULT true,
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
-  CONSTRAINT custom_rules_pkey PRIMARY KEY (id),
   CONSTRAINT custom_rules_company_id_companies_id_fk FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
 CREATE TABLE public.dynamic_metrics (
-  id integer NOT NULL DEFAULT nextval('dynamic_metrics_id_seq'::regclass),
+  id SERIAL PRIMARY KEY,
   company_id uuid NOT NULL,
   nome text NOT NULL,
   pipeline_stage_id integer NOT NULL,
@@ -133,11 +143,10 @@ CREATE TABLE public.dynamic_metrics (
   active boolean DEFAULT true,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT dynamic_metrics_pkey PRIMARY KEY (id),
   CONSTRAINT dynamic_metrics_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
 CREATE TABLE public.from_webhook (
-  id integer NOT NULL DEFAULT nextval('from_webhook_id_seq'::regclass),
+  id SERIAL PRIMARY KEY,
   webhook_type text,
   payload_id text,
   chat_id text,
@@ -159,7 +168,6 @@ CREATE TABLE public.from_webhook (
   broker_id bigint,
   lead_id bigint,
   inserted_at timestamp without time zone DEFAULT now(),
-  CONSTRAINT from_webhook_pkey PRIMARY KEY (id),
   CONSTRAINT from_webhook_broker_id_fkey FOREIGN KEY (broker_id) REFERENCES public.brokers(id)
 );
 CREATE TABLE public.kommo_config (
@@ -204,7 +212,7 @@ CREATE TABLE public.leads (
   CONSTRAINT fk_leads_company FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
 CREATE TABLE public.metric_results (
-  id integer NOT NULL DEFAULT nextval('metric_results_id_seq'::regclass),
+  id SERIAL PRIMARY KEY,
   dynamic_metric_id integer NOT NULL,
   company_id uuid NOT NULL,
   valor_atual integer NOT NULL,
@@ -215,22 +223,11 @@ CREATE TABLE public.metric_results (
   calculado_em timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT metric_results_pkey PRIMARY KEY (id),
   CONSTRAINT metric_results_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
   CONSTRAINT metric_results_dynamic_metric_id_fkey FOREIGN KEY (dynamic_metric_id) REFERENCES public.dynamic_metrics(id)
 );
-CREATE TABLE public.rules (
-  id integer NOT NULL DEFAULT nextval('rules_id_seq'::regclass),
-  nome text NOT NULL,
-  pontos integer NOT NULL,
-  coluna_nome text NOT NULL UNIQUE,
-  created_at timestamp without time zone DEFAULT now(),
-  updated_at timestamp without time zone DEFAULT now(),
-  descricao text,
-  CONSTRAINT rules_pkey PRIMARY KEY (id)
-);
 CREATE TABLE public.sla_metrics (
-  id integer NOT NULL DEFAULT nextval('sla_metrics_id_seq'::regclass),
+  id SERIAL PRIMARY KEY,
   company_id uuid NOT NULL DEFAULT gen_random_uuid(),
   broker_id bigint NOT NULL,
   broker_name text,
@@ -241,7 +238,6 @@ CREATE TABLE public.sla_metrics (
   period_end timestamp without time zone,
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
-  CONSTRAINT sla_metrics_pkey PRIMARY KEY (id),
   CONSTRAINT sla_metrics_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
   CONSTRAINT sla_metrics_broker_id_fkey FOREIGN KEY (broker_id) REFERENCES public.brokers(id)
 );

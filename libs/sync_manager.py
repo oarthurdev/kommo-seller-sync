@@ -456,7 +456,7 @@ class SyncManager:
                                                 60) if self.config else 60
                 next_sync = now + timedelta(minutes=sync_interval)
 
-                self.supabase.client.table("kommo_config").update({
+                self.supabase.client.schema("cf_kommo").table("kommo_config").update({
                     "last_sync":
                     now.isoformat(),
                     "next_sync":
@@ -642,7 +642,7 @@ class SyncManager:
 
             # Obter configuração da empresa, se necessário
             if not self.config:
-                config_result = self.supabase.client.table(
+                config_result = self.supabase.client.schema("cf_kommo").table(
                     "kommo_config").select("*").eq("company_id",
                                                    company_id).execute()
                 self.config = config_result.data[0] if config_result.data else {
@@ -663,7 +663,7 @@ class SyncManager:
                 if (now - last_snapshot).days >= 7:
                     self.create_data_snapshot(company_id, "weekly_auto")
 
-            config_data = self.supabase.client.table("kommo_config").select(
+            config_data = self.supabase.client.schema("cf_kommo").table("kommo_config").select(
                 "*").eq("company_id", company_id).execute().data
             if not config_data:
                 logger.error(
@@ -891,7 +891,7 @@ class SyncManager:
 
             # Atualizar timestamps de sincronização
             next_sync = now + timedelta(minutes=sync_interval)
-            self.supabase.client.table("kommo_config").update({
+            self.supabase.client.schema("cf_kommo").table("kommo_config").update({
                 "last_sync":
                 now.isoformat(),
                 "next_sync":
@@ -908,7 +908,7 @@ class SyncManager:
         """Verifica se sincronização é necessária baseada em timestamp"""
         try:
             # Verifica último sync na configuração
-            config_result = self.supabase.client.table("kommo_config").select(
+            config_result = self.supabase.client.schema("cf_kommo").table("kommo_config").select(
                 "last_sync, sync_interval").eq("active", True).execute()
 
             if not config_result.data:

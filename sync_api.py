@@ -48,7 +48,7 @@ SYNC_CONFIG = {
 def load_companies():
     """Load all companies from kommo_config"""
     try:
-        result = supabase.client.table("kommo_config").select("*").execute()
+        result = supabase.client.schema("cf_kommo").table("kommo_config").select("*").execute()
         return result.data if result.data else []
     except Exception as e:
         logger.error(f"Error loading companies: {e}")
@@ -924,7 +924,7 @@ def reset_sync_timestamp(company_id):
         # Set last_sync to 7 days ago to avoid overload
         reset_date = datetime.now(timezone.utc) - timedelta(days=7)
 
-        result = supabase.client.table("kommo_config").update({
+        result = supabase.client.schema("cf_kommo").table("kommo_config").update({
             "last_sync": reset_date.isoformat()
         }).eq("company_id", company_id).eq("active", True).execute()
 

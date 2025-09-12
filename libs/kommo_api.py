@@ -258,7 +258,7 @@ class KommoAPI:
                     last_sync_str = str(last_activity_created_at)
 
                 # Update the last_sync field in kommo_config
-                result = self.supabase_client.client.table(
+                result = self.supabase_client.client.schema("cf_kommo").table(
                     "kommo_config").update({
                         "last_sync": last_sync_str
                     }).eq("company_id", company_id).eq("active",
@@ -278,7 +278,7 @@ class KommoAPI:
             if hasattr(
                     self,
                     'supabase_client') and self.supabase_client and company_id:
-                result = self.supabase_client.client.table(
+                result = self.supabase_client.client.schema("cf_kommo").table(
                     "kommo_config").select("last_sync").eq(
                         "company_id", company_id).eq("active", True).execute()
 
@@ -425,7 +425,7 @@ class KommoAPI:
             if hasattr(self, 'supabase_client') and self.supabase_client:
                 try:
                     # Get pipeline_id from kommo_config table for this company
-                    result = self.supabase_client.client.table(
+                    result = self.supabase_client.client.schema("cf_kommo").table(
                         "kommo_config").select("pipeline_id").eq(
                             "company_id", company_id).eq("active",
                                                          True).execute()

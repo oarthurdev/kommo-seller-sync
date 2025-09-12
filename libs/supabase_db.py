@@ -41,7 +41,7 @@ class SupabaseClient:
     def _load_initial_config(self):
         """Try to load initial configuration without raising errors"""
         try:
-            config = self.client.table("kommo_config").select("*").eq(
+            config = self.client.schema("cf_kommo").table("kommo_config").select("*").eq(
                 "active", True).execute()
             if config.data:
                 self.kommo_config = config.data[0]
@@ -50,7 +50,7 @@ class SupabaseClient:
                     company_id = self._get_company_id(
                         self.kommo_config['api_url'],
                         self.kommo_config['access_token'])
-                    self.client.table("kommo_config").update({
+                    self.client.schema("cf_kommo").table("kommo_config").update({
                         'company_id':
                         company_id
                     }).eq('id', self.kommo_config['id']).execute()
@@ -80,7 +80,7 @@ class SupabaseClient:
                     company_id = self._get_company_id(
                         updated_config['api_url'],
                         updated_config['access_token'])
-                    self.client.table("kommo_config").update({
+                    self.client.schema("cf_kommo").table("kommo_config").update({
                         'company_id':
                         company_id
                     }).eq('id', updated_config['id']).execute()
@@ -100,7 +100,7 @@ class SupabaseClient:
                 return
 
             self.last_check = current_time
-            result = self.client.table("kommo_config").select("*").execute()
+            result = self.client.schema("cf_kommo").table("kommo_config").select("*").execute()
 
             if not result.data:
                 return
@@ -120,7 +120,7 @@ class SupabaseClient:
                 if not new_config.get('company_id'):
                     company_id = self._get_company_id(
                         new_config['api_url'], new_config['access_token'])
-                    self.client.table("kommo_config").update({
+                    self.client.schema("cf_kommo").table("kommo_config").update({
                         'company_id':
                         company_id
                     }).eq('id', new_config['id']).execute()
@@ -182,7 +182,7 @@ class SupabaseClient:
                 # Get company_id and update config
                 company_id = self._get_company_id(new_config['api_url'],
                                                   new_config['access_token'])
-                self.client.table("kommo_config").update({
+                self.client.schema("cf_kommo").table("kommo_config").update({
                     'company_id': company_id,
                     'active': True
                 }).eq('id', new_config['id']).execute()
@@ -263,7 +263,7 @@ class SupabaseClient:
     def load_kommo_config(self, company_id=None):
         """Load Kommo API configuration from Supabase"""
         try:
-            query = self.client.table("kommo_config").select("*").eq(
+            query = self.client.schema("cf_kommo").table("kommo_config").select("*").eq(
                 "active", True)
 
             if company_id:
@@ -282,7 +282,7 @@ class SupabaseClient:
                 if config.get('company_id') is None:
                     company_id = self._get_company_id(config['api_url'],
                                                       config['access_token'])
-                    self.client.table("kommo_config").update({
+                    self.client.schema("cf_kommo").table("kommo_config").update({
                         'company_id':
                         company_id
                     }).eq('id', config['id']).execute()
