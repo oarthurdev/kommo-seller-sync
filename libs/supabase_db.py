@@ -41,8 +41,8 @@ class SupabaseClient:
     def _load_initial_config(self):
         """Try to load initial configuration without raising errors"""
         try:
-            config = self.client.schema("cf_kommo").table("kommo_config").select("*").eq(
-                "active", True).execute()
+            config = self.client.schema("cf_kommo").table(
+                "kommo_config").select("*").eq("active", True).execute()
             if config.data:
                 self.kommo_config = config.data[0]
 
@@ -50,10 +50,10 @@ class SupabaseClient:
                     company_id = self._get_company_id(
                         self.kommo_config['api_url'],
                         self.kommo_config['access_token'])
-                    self.client.schema("cf_kommo").table("kommo_config").update({
-                        'company_id':
-                        company_id
-                    }).eq('id', self.kommo_config['id']).execute()
+                    self.client.schema("cf_kommo").table(
+                        "kommo_config").update({
+                            'company_id': company_id
+                        }).eq('id', self.kommo_config['id']).execute()
                     self.kommo_config['company_id'] = company_id
 
                 try:
@@ -80,10 +80,10 @@ class SupabaseClient:
                     company_id = self._get_company_id(
                         updated_config['api_url'],
                         updated_config['access_token'])
-                    self.client.schema("cf_kommo").table("kommo_config").update({
-                        'company_id':
-                        company_id
-                    }).eq('id', updated_config['id']).execute()
+                    self.client.schema("cf_kommo").table(
+                        "kommo_config").update({
+                            'company_id': company_id
+                        }).eq('id', updated_config['id']).execute()
                     updated_config['company_id'] = company_id
 
                 self._sync_all_data(updated_config)
@@ -100,7 +100,8 @@ class SupabaseClient:
                 return
 
             self.last_check = current_time
-            result = self.client.schema("cf_kommo").table("kommo_config").select("*").execute()
+            result = self.client.schema("cf_kommo").table(
+                "kommo_config").select("*").execute()
 
             if not result.data:
                 return
@@ -120,10 +121,10 @@ class SupabaseClient:
                 if not new_config.get('company_id'):
                     company_id = self._get_company_id(
                         new_config['api_url'], new_config['access_token'])
-                    self.client.schema("cf_kommo").table("kommo_config").update({
-                        'company_id':
-                        company_id
-                    }).eq('id', new_config['id']).execute()
+                    self.client.schema("cf_kommo").table(
+                        "kommo_config").update({
+                            'company_id': company_id
+                        }).eq('id', new_config['id']).execute()
                     new_config['company_id'] = company_id
 
                 self._sync_all_data(new_config)
@@ -183,8 +184,10 @@ class SupabaseClient:
                 company_id = self._get_company_id(new_config['api_url'],
                                                   new_config['access_token'])
                 self.client.schema("cf_kommo").table("kommo_config").update({
-                    'company_id': company_id,
-                    'active': True
+                    'company_id':
+                    company_id,
+                    'active':
+                    True
                 }).eq('id', new_config['id']).execute()
 
                 # Setup default rules for new company
@@ -263,8 +266,8 @@ class SupabaseClient:
     def load_kommo_config(self, company_id=None):
         """Load Kommo API configuration from Supabase"""
         try:
-            query = self.client.schema("cf_kommo").table("kommo_config").select("*").eq(
-                "active", True)
+            query = self.client.schema("cf_kommo").table(
+                "kommo_config").select("*").eq("active", True)
 
             if company_id:
                 query = query.eq("company_id", company_id)
@@ -282,10 +285,10 @@ class SupabaseClient:
                 if config.get('company_id') is None:
                     company_id = self._get_company_id(config['api_url'],
                                                       config['access_token'])
-                    self.client.schema("cf_kommo").table("kommo_config").update({
-                        'company_id':
-                        company_id
-                    }).eq('id', config['id']).execute()
+                    self.client.schema("cf_kommo").table(
+                        "kommo_config").update({
+                            'company_id': company_id
+                        }).eq('id', config['id']).execute()
                     config['company_id'] = company_id
                     self._sync_all_data(config)
 
@@ -745,56 +748,85 @@ class SupabaseClient:
         """
         try:
             logger.info(f"Initializing broker points for company {company_id}")
-            
+
             # Get all brokers for this company
-            brokers_result = self.client.table("brokers").select("*").eq("company_id", company_id).execute()
-            
+            brokers_result = self.client.table("brokers").select("*").eq(
+                "company_id", company_id).execute()
+
             if not brokers_result.data:
                 logger.warning(f"No brokers found for company {company_id}")
                 return
-            
+
             # Check existing broker points
-            existing_points = self.client.table("broker_points").select("id").eq("company_id", company_id).execute()
-            existing_broker_ids = {point['id'] for point in existing_points.data} if existing_points.data else set()
-            
+            existing_points = self.client.table("broker_points").select(
+                "id").eq("company_id", company_id).execute()
+            existing_broker_ids = {
+                point['id']
+                for point in existing_points.data
+            } if existing_points.data else set()
+
             # Initialize points for brokers that don't have records yet
             points_to_insert = []
             current_time = datetime.now().isoformat()
-            
+
             for broker in brokers_result.data:
                 broker_id = broker['id']
                 if broker_id not in existing_broker_ids:
                     points_to_insert.append({
-                        'id': broker_id,
-                        'company_id': company_id,
-                        'nome': broker.get('nome', 'Unknown'),
-                        'pontos': 0,
-                        'leads_visitados': 0,
-                        'propostas_enviadas': 0,
-                        'vendas_realizadas': 0,
-                        'leads_perdidos': 0,
-                        'leads_descartados': 0,
-                        'updated_at': current_time
+                        'id':
+                        broker_id,
+                        'company_id':
+                        company_id,
+                        'nome':
+                        broker.get('nome', 'Unknown'),
+                        'pontos':
+                        0,
+                        'leads_visitados':
+                        0,
+                        'propostas_enviadas':
+                        0,
+                        'vendas_realizadas':
+                        0,
+                        'leads_perdidos':
+                        0,
+                        'leads_descartados':
+                        0,
+                        'total_leads':
+                        0,
+                        'updated_at':
+                        current_time
                     })
-            
+
             if points_to_insert:
-                result = self.client.table("broker_points").upsert(points_to_insert, on_conflict='id').execute()
+                result = self.client.table("broker_points").upsert(
+                    points_to_insert, on_conflict='id').execute()
                 if hasattr(result, "error") and result.error:
                     raise Exception(f"Supabase error: {result.error}")
-                    
-                logger.info(f"Initialized/updated broker points for {len(points_to_insert)} brokers in company {company_id}")
+
+                logger.info(
+                    f"Initialized/updated broker points for {len(points_to_insert)} brokers in company {company_id}"
+                )
             else:
-                logger.info(f"All brokers already have points initialized for company {company_id}")
-                
+                logger.info(
+                    f"All brokers already have points initialized for company {company_id}"
+                )
+
         except Exception as e:
-            logger.error(f"Failed to initialize broker points for company {company_id}: {str(e)}")
+            logger.error(
+                f"Failed to initialize broker points for company {company_id}: {str(e)}"
+            )
             raise
 
-    def update_broker_points(self, brokers=[], leads=[], activities=[], company_id=None):
+    def update_broker_points(self,
+                             brokers=[],
+                             leads=[],
+                             activities=[],
+                             company_id=None):
         """
         Alias for upsert_broker_points to maintain compatibility
         """
-        return self.upsert_broker_points(brokers, leads, activities, company_id)
+        return self.upsert_broker_points(brokers, leads, activities,
+                                         company_id)
 
     def upsert_broker_points(self,
                              brokers=[],
@@ -982,7 +1014,7 @@ class SupabaseClient:
 
             # Use more efficient query to get existing points
             existing_points = self.client.table("broker_points").select(
-                "id, pontos, leads_visitados, propostas_enviadas, vendas_realizadas, leads_perdidos, leads_descartados"
+                "id, pontos, leads_visitados, propostas_enviadas, vendas_realizadas, leads_perdidos, leads_descartados, total_leads"
             ).eq("company_id", company_id).execute()
             points_dict = {
                 point['id']: point
@@ -1012,18 +1044,22 @@ class SupabaseClient:
                 logger.info(f"  - {len(broker_activities)} activities")
 
                 # ===== Cálculo especial: leads_visitados e propostas_enviadas =====
-                def _compute_visitas_propostas(broker_leads_df, broker_acts_df, stages_df, company_id):
+                def _compute_visitas_propostas(broker_leads_df, broker_acts_df,
+                                               stages_df, company_id):
                     if broker_leads_df.empty or broker_acts_df.empty or stages_df.empty:
                         return 0, 0
 
                     # Filtrar stages pelo company_id (se existir a coluna)
                     if 'company_id' in stages_df.columns:
-                        stages_use = stages_df[stages_df['company_id'] == company_id].copy()
+                        stages_use = stages_df[stages_df['company_id'] ==
+                                               company_id].copy()
                     else:
                         stages_use = stages_df.copy()
 
                     # Garantir colunas esperadas
-                    needed_stage_cols = {'stage_id', 'stage_name', 'pipeline_id'}
+                    needed_stage_cols = {
+                        'stage_id', 'stage_name', 'pipeline_id'
+                    }
                     if not needed_stage_cols.issubset(set(stages_use.columns)):
                         return 0, 0
 
@@ -1032,24 +1068,24 @@ class SupabaseClient:
                         stages_use[['stage_id', 'stage_name', 'pipeline_id']],
                         left_on='status_novo',
                         right_on='stage_id',
-                        how='inner'
-                    )
+                        how='inner')
 
                     if m1.empty:
                         return 0, 0
 
                     # Join com leads do corretor (lead_id == id)
                     needed_lead_cols = {'id', 'pipeline_id', 'company_id'}
-                    lead_cols_present = [c for c in needed_lead_cols if c in broker_leads_df.columns]
+                    lead_cols_present = [
+                        c for c in needed_lead_cols
+                        if c in broker_leads_df.columns
+                    ]
                     leads_use = broker_leads_df[lead_cols_present].copy()
 
-                    m2 = m1.merge(
-                        leads_use,
-                        left_on='lead_id',
-                        right_on='id',
-                        how='inner',
-                        suffixes=('_stage', '_lead')
-                    )
+                    m2 = m1.merge(leads_use,
+                                  left_on='lead_id',
+                                  right_on='id',
+                                  how='inner',
+                                  suffixes=('_stage', '_lead'))
 
                     if m2.empty:
                         return 0, 0
@@ -1062,7 +1098,8 @@ class SupabaseClient:
 
                     # Exigir pipeline_id iguais (stage == lead)
                     if 'pipeline_id_stage' in m2.columns and 'pipeline_id_lead' in m2.columns:
-                        m2 = m2[m2['pipeline_id_stage'] == m2['pipeline_id_lead']]
+                        m2 = m2[m2['pipeline_id_stage'] ==
+                                m2['pipeline_id_lead']]
                     else:
                         # fallback para nomes sem sufixo (se merge não criou)
                         if 'pipeline_id_x' in m2.columns and 'pipeline_id_y' in m2.columns:
@@ -1079,13 +1116,16 @@ class SupabaseClient:
                     if stage_col not in m2.columns:
                         return 0, 0
 
-                    visitas_leads = m2[m2[stage_col].str.contains('visita', case=False, na=False)]['id'].nunique()
-                    propostas_leads = m2[m2[stage_col].str.contains('proposta', case=False, na=False)]['id'].nunique()
+                    visitas_leads = m2[m2[stage_col].str.contains(
+                        'visita', case=False, na=False)]['id'].nunique()
+                    propostas_leads = m2[m2[stage_col].str.contains(
+                        'proposta', case=False, na=False)]['id'].nunique()
                     return visitas_leads, propostas_leads
 
                 # Carregar estágios (stages) da empresa do banco de dados
                 try:
-                    stages_result = self.client.table("stages_list").select("*").eq("company_id", company_id).execute()
+                    stages_result = self.client.table("stages_list").select(
+                        "*").eq("company_id", company_id).execute()
                     if stages_result.data:
                         stages = pd.DataFrame(stages_result.data)
                     else:
@@ -1096,25 +1136,26 @@ class SupabaseClient:
 
                 # Calcula visitas/propostas com as novas regras
                 visitas_count, propostas_count = _compute_visitas_propostas(
-                    broker_leads, broker_activities, stages, company_id
-                )
+                    broker_leads, broker_activities, stages, company_id)
 
                 # ===== Loop de regras, COM override para as duas regras especiais =====
                 rule_results = {}
                 total_points = 0
                 for rule_name, rule_config in rules.items():
                     try:
-                        if rule_name in ('leads_visitados', 'propostas_enviadas'):
+                        if rule_name in ('leads_visitados',
+                                         'propostas_enviadas'):
                             count = visitas_count if rule_name == 'leads_visitados' else propostas_count
                         else:
                             count = self._calculate_rule_points(
                                 rule_name, rule_config, broker_leads,
-                                broker_activities, leads, activities, company_id,
-                                broker_id, broker_name
-                            )
+                                broker_activities, leads, activities,
+                                company_id, broker_id, broker_name)
 
                         rule_results[rule_name] = count
-                        points_per_occurrence = rule_config.get('pontos', 0) if isinstance(rule_config, dict) else rule_config
+                        points_per_occurrence = rule_config.get(
+                            'pontos', 0) if isinstance(rule_config,
+                                                       dict) else rule_config
                         total_points += count * points_per_occurrence
 
                         if count > 0:
@@ -1123,7 +1164,9 @@ class SupabaseClient:
                             )
 
                     except Exception as e:
-                        logger.error(f"Error calculating rule {rule_name} for broker {broker_id}: {str(e)}")
+                        logger.error(
+                            f"Error calculating rule {rule_name} for broker {broker_id}: {str(e)}"
+                        )
                         rule_results[rule_name] = 0
 
                 broker_points_data = {
@@ -1140,7 +1183,8 @@ class SupabaseClient:
                     'propostas_enviadas': 'propostas_enviadas',
                     'vendas_realizadas': 'vendas_realizadas',
                     'leads_perdidos': 'leads_perdidos',
-                    'leads_descartados': 'leads_descartados'
+                    'leads_descartados': 'leads_descartados',
+                    'total_leads': 'total_leads'
                 }
 
                 for rule_name, count in rule_results.items():
@@ -1183,20 +1227,34 @@ class SupabaseClient:
                         # Fallback to individual processing if batch fails
                         for broker_data in all_broker_points:
                             try:
-                                individual_result = self.client.table("broker_points").upsert(
-                                    [broker_data], on_conflict='id').execute()
-                                
-                                if hasattr(individual_result, "error") and individual_result.error:
-                                    logger.error(f"Individual upsert error for broker {broker_data['id']}: {individual_result.error}")
+                                individual_result = self.client.table(
+                                    "broker_points").upsert(
+                                        [broker_data],
+                                        on_conflict='id').execute()
+
+                                if hasattr(
+                                        individual_result,
+                                        "error") and individual_result.error:
+                                    logger.error(
+                                        f"Individual upsert error for broker {broker_data['id']}: {individual_result.error}"
+                                    )
                             except Exception as individual_error:
-                                logger.error(f"Individual processing error for broker {broker_data['id']}: {individual_error}")
+                                logger.error(
+                                    f"Individual processing error for broker {broker_data['id']}: {individual_error}"
+                                )
                     else:
-                        logger.info(f"Successfully batch processed {len(all_broker_points)} broker points")
-                        
+                        logger.info(
+                            f"Successfully batch processed {len(all_broker_points)} broker points"
+                        )
+
                         # Log specific info for leads_perdidos
-                        perdidos_count = sum(1 for bp in all_broker_points if bp.get('leads_perdidos', 0) > 0)
+                        perdidos_count = sum(
+                            1 for bp in all_broker_points
+                            if bp.get('leads_perdidos', 0) > 0)
                         if perdidos_count > 0:
-                            logger.info(f"✅ {perdidos_count} brokers with leads_perdidos updated in batch")
+                            logger.info(
+                                f"✅ {perdidos_count} brokers with leads_perdidos updated in batch"
+                            )
 
                 except Exception as batch_error:
                     logger.error(f"Batch processing error: {str(batch_error)}")
@@ -1374,7 +1432,8 @@ class SupabaseClient:
                     'propostas_enviadas': 8,
                     'vendas_realizadas': 100,
                     'leads_perdidos': -10,
-                    'leads_descartados': -5
+                    'leads_descartados': -5,
+                    'total_leads': 0
                 }
 
             # Check if company already has rules
@@ -1712,7 +1771,6 @@ class SupabaseClient:
                 )
                 # Continue with original data if conversion fails
 
-            
             if rule_name == "vendas_realizadas":
                 # Vendas realizadas - buscar atividades de mudança para status "Ganho" no período filtrado
                 if broker_activities.empty:
@@ -1767,18 +1825,21 @@ class SupabaseClient:
                 if current_broker_id is None:
                     # Tentar extrair das atividades do broker
                     if not broker_activities.empty and 'user_id' in broker_activities.columns:
-                        user_ids = broker_activities['user_id'].dropna().unique()
+                        user_ids = broker_activities['user_id'].dropna(
+                        ).unique()
                         if len(user_ids) > 0:
                             current_broker_id = user_ids[0]
 
                     # Tentar extrair dos leads
                     elif not broker_leads.empty and 'responsavel_id' in broker_leads.columns:
-                        responsavel_ids = broker_leads['responsavel_id'].dropna().unique()
+                        responsavel_ids = broker_leads[
+                            'responsavel_id'].dropna().unique()
                         if len(responsavel_ids) > 0:
                             current_broker_id = responsavel_ids[0]
 
                 if current_broker_id is None:
-                    logger.error("❌ Nenhum broker ID disponível - retornando 0")
+                    logger.error(
+                        "❌ Nenhum broker ID disponível - retornando 0")
                     return 0
 
                 # Converter broker_id para o tipo correto
@@ -1786,7 +1847,9 @@ class SupabaseClient:
                     current_broker_id = int(current_broker_id) if isinstance(
                         current_broker_id, (str, float)) else current_broker_id
                 except (ValueError, TypeError):
-                    logger.error(f"Erro ao converter broker_id {current_broker_id} para int")
+                    logger.error(
+                        f"Erro ao converter broker_id {current_broker_id} para int"
+                    )
                     return 0
 
                 # Calcular usando função RPC otimizada
@@ -1849,30 +1912,40 @@ class SupabaseClient:
                 # Nova regra: contar leads com base no custom_fields_values
                 # Buscar o nome do broker para comparação
                 try:
-                    logger.info(f"🔍 === INICIANDO DEBUG DETALHADO TOTAL_LEADS ===")
+                    logger.info(
+                        f"🔍 === INICIANDO DEBUG DETALHADO TOTAL_LEADS ===")
                     logger.info(f"🔍 Broker ID: {broker_id}")
                     logger.info(f"🔍 Broker Name: '{broker_name}'")
                     logger.info(f"🔍 Company ID: {company_id}")
-                    
+
                     if not broker_name:
-                        logger.warning(f"❌ Broker name not provided for total_leads calculation")
+                        logger.warning(
+                            f"❌ Broker name not provided for total_leads calculation"
+                        )
                         return 0
-                    
+
                     # Verificar se todos os leads estão disponíveis
                     if all_leads.empty:
-                        logger.warning("❌ No leads available for total_leads calculation")
+                        logger.warning(
+                            "❌ No leads available for total_leads calculation")
                         return 0
-                    
-                    logger.info(f"📊 Total leads available for analysis: {len(all_leads)}")
-                    
+
+                    logger.info(
+                        f"📊 Total leads available for analysis: {len(all_leads)}"
+                    )
+
                     # Verificar se a coluna custom_fields_values existe
                     if 'custom_fields_values' not in all_leads.columns:
-                        logger.warning("❌ Column 'custom_fields_values' not found in leads")
-                        logger.info(f"📋 Available columns: {list(all_leads.columns)}")
+                        logger.warning(
+                            "❌ Column 'custom_fields_values' not found in leads"
+                        )
+                        logger.info(
+                            f"📋 Available columns: {list(all_leads.columns)}")
                         return 0
-                    
-                    logger.info(f"✅ Column 'custom_fields_values' found in leads")
-                    
+
+                    logger.info(
+                        f"✅ Column 'custom_fields_values' found in leads")
+
                     import json
                     total_count = 0
                     processed_count = 0
@@ -1881,42 +1954,60 @@ class SupabaseClient:
                     skipped_not_list = 0
                     skipped_no_corretor_field = 0
                     debug_samples = []
-                    
+
                     # Percorrer todos os leads para encontrar os que têm este corretor responsável
                     for idx, lead in all_leads.iterrows():
                         processed_count += 1
                         lead_id = lead.get('id', 'unknown')
-                        
+
                         # Debug detalhado apenas para os primeiros 5 leads
                         detailed_debug = processed_count <= 5
-                        
+
                         if detailed_debug:
-                            logger.info(f"🔎 === PROCESSANDO LEAD #{processed_count} (ID: {lead_id}) ===")
-                        
+                            logger.info(
+                                f"🔎 === PROCESSANDO LEAD #{processed_count} (ID: {lead_id}) ==="
+                            )
+
                         try:
-                            custom_fields_value = lead.get('custom_fields_values', '')
-                            
+                            custom_fields_value = lead.get(
+                                'custom_fields_values', '')
+
                             if detailed_debug:
-                                logger.info(f"🔎 custom_fields_value type: {type(custom_fields_value)}")
+                                logger.info(
+                                    f"🔎 custom_fields_value type: {type(custom_fields_value)}"
+                                )
                                 if isinstance(custom_fields_value, str):
-                                    logger.info(f"🔎 custom_fields_value length: {len(custom_fields_value)}")
-                                    logger.info(f"🔎 custom_fields_value preview: {custom_fields_value[:200]}...")
+                                    logger.info(
+                                        f"🔎 custom_fields_value length: {len(custom_fields_value)}"
+                                    )
+                                    logger.info(
+                                        f"🔎 custom_fields_value preview: {custom_fields_value[:200]}..."
+                                    )
                                 else:
-                                    logger.info(f"🔎 custom_fields_value value: {custom_fields_value}")
-                            
+                                    logger.info(
+                                        f"🔎 custom_fields_value value: {custom_fields_value}"
+                                    )
+
                             # Verificar se o campo não está vazio ou é nulo
                             if not custom_fields_value or custom_fields_value is None:
                                 skipped_empty += 1
                                 if detailed_debug:
-                                    logger.info(f"⏭️  Skipping - empty or null custom_fields_value")
+                                    logger.info(
+                                        f"⏭️  Skipping - empty or null custom_fields_value"
+                                    )
                                 continue
-                            
+
                             # Se for string, converter para lower para comparação
                             if isinstance(custom_fields_value, str):
-                                if custom_fields_value.strip() == '' or custom_fields_value.lower() in ['nan', 'null', 'none']:
+                                if custom_fields_value.strip(
+                                ) == '' or custom_fields_value.lower() in [
+                                        'nan', 'null', 'none'
+                                ]:
                                     skipped_empty += 1
                                     if detailed_debug:
-                                        logger.info(f"⏭️  Skipping - empty string or null-like value")
+                                        logger.info(
+                                            f"⏭️  Skipping - empty string or null-like value"
+                                        )
                                     continue
                                 # Parse do JSON string
                                 if detailed_debug:
@@ -1925,128 +2016,188 @@ class SupabaseClient:
                             elif isinstance(custom_fields_value, (dict, list)):
                                 # Já é um objeto Python (parsed JSON)
                                 if detailed_debug:
-                                    logger.info(f"✅ Already parsed as {type(custom_fields_value)}")
+                                    logger.info(
+                                        f"✅ Already parsed as {type(custom_fields_value)}"
+                                    )
                                 custom_fields = custom_fields_value
                             else:
                                 # Tentar converter para string e fazer parse
                                 if detailed_debug:
-                                    logger.info(f"🔄 Converting {type(custom_fields_value)} to string and parsing...")
+                                    logger.info(
+                                        f"🔄 Converting {type(custom_fields_value)} to string and parsing..."
+                                    )
                                 custom_fields_str = str(custom_fields_value)
-                                if custom_fields_str.strip() == '' or custom_fields_str.lower() in ['nan', 'null', 'none']:
+                                if custom_fields_str.strip(
+                                ) == '' or custom_fields_str.lower() in [
+                                        'nan', 'null', 'none'
+                                ]:
                                     skipped_empty += 1
                                     if detailed_debug:
-                                        logger.info(f"⏭️  Skipping - converted string is empty or null-like")
+                                        logger.info(
+                                            f"⏭️  Skipping - converted string is empty or null-like"
+                                        )
                                     continue
                                 custom_fields = json.loads(custom_fields_str)
-                            
+
                             # Verificar se é uma lista
                             if not isinstance(custom_fields, list):
                                 skipped_not_list += 1
                                 if detailed_debug:
-                                    logger.info(f"⏭️  Skipping - custom_fields is not a list (type: {type(custom_fields)})")
+                                    logger.info(
+                                        f"⏭️  Skipping - custom_fields is not a list (type: {type(custom_fields)})"
+                                    )
                                 continue
-                            
+
                             if detailed_debug:
-                                logger.info(f"📝 custom_fields is a list with {len(custom_fields)} items")
+                                logger.info(
+                                    f"📝 custom_fields is a list with {len(custom_fields)} items"
+                                )
                                 for i, field in enumerate(custom_fields):
                                     if isinstance(field, dict):
-                                        field_name = field.get('field_name', 'NO_NAME')
-                                        logger.info(f"   [{i}] field_name: '{field_name}'")
+                                        field_name = field.get(
+                                            'field_name', 'NO_NAME')
+                                        logger.info(
+                                            f"   [{i}] field_name: '{field_name}'"
+                                        )
                                     else:
-                                        logger.info(f"   [{i}] field is not dict: {type(field)}")
-                                        
+                                        logger.info(
+                                            f"   [{i}] field is not dict: {type(field)}"
+                                        )
+
                             # Procurar pelo campo "Corretor responsável"
                             found_corretor_field = False
                             for field_idx, field in enumerate(custom_fields):
-                                if (isinstance(field, dict) and 
-                                    field.get('field_name') == 'Corretor responsável'):
-                                    
+                                if (isinstance(field, dict)
+                                        and field.get('field_name')
+                                        == 'Corretor responsável'):
+
                                     found_corretor_field = True
-                                    
+
                                     if detailed_debug:
-                                        logger.info(f"✅ Found 'Corretor responsável' field at index {field_idx}")
-                                        logger.info(f"🔎 Field structure: {field}")
-                                    
-                                    if ('values' in field and 
-                                        isinstance(field['values'], list) and
-                                        len(field['values']) > 0):
-                                        
+                                        logger.info(
+                                            f"✅ Found 'Corretor responsável' field at index {field_idx}"
+                                        )
+                                        logger.info(
+                                            f"🔎 Field structure: {field}")
+
+                                    if ('values' in field and isinstance(
+                                            field['values'], list)
+                                            and len(field['values']) > 0):
+
                                         # Extrair o valor do corretor
-                                        corretor_value = field['values'][0].get('value', '')
-                                        
+                                        corretor_value = field['values'][
+                                            0].get('value', '')
+
                                         if detailed_debug:
-                                            logger.info(f"🔎 Corretor value: '{corretor_value}'")
-                                            logger.info(f"🔎 Target broker name: '{broker_name}'")
-                                            logger.info(f"🔎 Match? {corretor_value == broker_name}")
-                                        
+                                            logger.info(
+                                                f"🔎 Corretor value: '{corretor_value}'"
+                                            )
+                                            logger.info(
+                                                f"🔎 Target broker name: '{broker_name}'"
+                                            )
+                                            logger.info(
+                                                f"🔎 Match? {corretor_value == broker_name}"
+                                            )
+
                                         # Extrair apenas o primeiro nome do broker para comparação
-                                        broker_first_name = broker_name.split()[0] if broker_name else ""
-                                        
+                                        broker_first_name = broker_name.split(
+                                        )[0] if broker_name else ""
+
                                         if detailed_debug:
-                                            logger.info(f"🔎 Broker first name extracted: '{broker_first_name}'")
-                                        
+                                            logger.info(
+                                                f"🔎 Broker first name extracted: '{broker_first_name}'"
+                                            )
+
                                         # Comparar corretor_value com apenas o primeiro nome do broker
                                         if corretor_value == broker_first_name:
                                             total_count += 1
                                             match_info = {
                                                 'lead_id': lead_id,
-                                                'corretor_value': corretor_value,
-                                                'broker_first_name': broker_first_name,
-                                                'broker_full_name': broker_name,
-                                                'processed_index': processed_count
+                                                'corretor_value':
+                                                corretor_value,
+                                                'broker_first_name':
+                                                broker_first_name,
+                                                'broker_full_name':
+                                                broker_name,
+                                                'processed_index':
+                                                processed_count
                                             }
                                             debug_samples.append(match_info)
-                                            
+
                                             if detailed_debug:
-                                                logger.info(f"✅ MATCH! Lead {lead_id} matched - '{corretor_value}' == '{broker_first_name}' (full: {broker_name})")
+                                                logger.info(
+                                                    f"✅ MATCH! Lead {lead_id} matched - '{corretor_value}' == '{broker_first_name}' (full: {broker_name})"
+                                                )
                                             elif total_count <= 10:  # Log first 10 matches even if not in detailed mode
-                                                logger.info(f"✅ Match #{total_count}: Lead {lead_id} → '{corretor_value}' == '{broker_first_name}' ({broker_name})")
-                                            
+                                                logger.info(
+                                                    f"✅ Match #{total_count}: Lead {lead_id} → '{corretor_value}' == '{broker_first_name}' ({broker_name})"
+                                                )
+
                                             break  # Sair do loop de campos
                                     else:
                                         if detailed_debug:
-                                            logger.info(f"⚠️  'Corretor responsável' field found but no valid values")
+                                            logger.info(
+                                                f"⚠️  'Corretor responsável' field found but no valid values"
+                                            )
                                         break
-                                        
+
                             if not found_corretor_field:
                                 skipped_no_corretor_field += 1
                                 if detailed_debug:
-                                    logger.info(f"⏭️  No 'Corretor responsável' field found in this lead")
-                                        
-                        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as e:
+                                    logger.info(
+                                        f"⏭️  No 'Corretor responsável' field found in this lead"
+                                    )
+
+                        except (json.JSONDecodeError, TypeError, KeyError,
+                                ValueError) as e:
                             skipped_invalid_json += 1
                             if detailed_debug:
-                                logger.info(f"❌ Error parsing custom_fields for lead {lead_id}: {e}")
+                                logger.info(
+                                    f"❌ Error parsing custom_fields for lead {lead_id}: {e}"
+                                )
                             elif skipped_invalid_json <= 5:  # Log first 5 errors
-                                logger.debug(f"❌ Parse error #{skipped_invalid_json} for lead {lead_id}: {e}")
+                                logger.debug(
+                                    f"❌ Parse error #{skipped_invalid_json} for lead {lead_id}: {e}"
+                                )
                             continue
-                    
+
                     # Resumo final detalhado
                     logger.info(f"🎯 === RESUMO FINAL TOTAL_LEADS ===")
                     logger.info(f"🎯 Broker: {broker_name} (ID: {broker_id})")
-                    logger.info(f"🎯 Total leads processados: {processed_count}")
+                    logger.info(
+                        f"🎯 Total leads processados: {processed_count}")
                     logger.info(f"🎯 Leads encontrados: {total_count}")
                     logger.info(f"🎯 Skipped empty/null: {skipped_empty}")
-                    logger.info(f"🎯 Skipped invalid JSON: {skipped_invalid_json}")
+                    logger.info(
+                        f"🎯 Skipped invalid JSON: {skipped_invalid_json}")
                     logger.info(f"🎯 Skipped not list: {skipped_not_list}")
-                    logger.info(f"🎯 Skipped no corretor field: {skipped_no_corretor_field}")
-                    
+                    logger.info(
+                        f"🎯 Skipped no corretor field: {skipped_no_corretor_field}"
+                    )
+
                     if debug_samples:
                         logger.info(f"🎯 Sample matches:")
-                        for i, sample in enumerate(debug_samples[:10]):  # Show first 10 matches
-                            logger.info(f"   [{i+1}] Lead {sample['lead_id']} → '{sample['corretor_value']}' == '{sample['broker_first_name']}' ({sample['broker_full_name']})")
+                        for i, sample in enumerate(
+                                debug_samples[:10]):  # Show first 10 matches
+                            logger.info(
+                                f"   [{i+1}] Lead {sample['lead_id']} → '{sample['corretor_value']}' == '{sample['broker_first_name']}' ({sample['broker_full_name']})"
+                            )
                         if len(debug_samples) > 10:
-                            logger.info(f"   ... and {len(debug_samples) - 10} more matches")
-                    
+                            logger.info(
+                                f"   ... and {len(debug_samples) - 10} more matches"
+                            )
+
                     # Cálculo de estatísticas
-                    success_rate = (total_count / processed_count * 100) if processed_count > 0 else 0
+                    success_rate = (total_count / processed_count *
+                                    100) if processed_count > 0 else 0
                     logger.info(f"🎯 Success rate: {success_rate:.2f}%")
-                    
+
                     logger.info(f"🎯 === FIM DEBUG TOTAL_LEADS ===")
                     return total_count
-                    
+
                 except Exception as e:
-                    logger.error(f"❌ FATAL ERROR in total_leads calculation: {e}")
+                    logger.error(
+                        f"❌ FATAL ERROR in total_leads calculation: {e}")
                     import traceback
                     logger.error(f"❌ Traceback: {traceback.format_exc()}")
                     return 0
@@ -2091,9 +2242,13 @@ class SupabaseClient:
                 return 0
 
             # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id, (str, float)) else broker_id
+            broker_id = int(broker_id) if isinstance(broker_id,
+                                                     (str,
+                                                      float)) else broker_id
 
-            logger.info(f"🔄 Executando RPC calculate_sla_leads_perdidos para broker {broker_id}")
+            logger.info(
+                f"🔄 Executando RPC calculate_sla_leads_perdidos para broker {broker_id}"
+            )
 
             # Usar função RPC otimizada do Supabase com conversão de tipos
             response = self.client.rpc('calculate_sla_leads_perdidos', {
@@ -2107,15 +2262,22 @@ class SupabaseClient:
 
             leads_perdidos_count = response.data if response.data is not None else 0
 
-            logger.info(f"✅ RPC finalizada - {leads_perdidos_count} leads perdidos para broker {broker_id}")
+            logger.info(
+                f"✅ RPC finalizada - {leads_perdidos_count} leads perdidos para broker {broker_id}"
+            )
 
             return leads_perdidos_count
 
         except Exception as e:
-            logger.error(f"❌ Erro no cálculo SLA para broker {broker_id}: {str(e)}")
+            logger.error(
+                f"❌ Erro no cálculo SLA para broker {broker_id}: {str(e)}")
             return 0
 
-    def get_sla_calculation_logs(self, company_id, broker_id=None, execution_id=None, limit=100):
+    def get_sla_calculation_logs(self,
+                                 company_id,
+                                 broker_id=None,
+                                 execution_id=None,
+                                 limit=100):
         """
         Busca logs detalhados do cálculo de SLA.
 
@@ -2140,7 +2302,8 @@ class SupabaseClient:
             if execution_id:
                 query = query.eq("execution_id", execution_id)
 
-            result = query.order("created_at", desc=True).limit(limit).execute()
+            result = query.order("created_at",
+                                 desc=True).limit(limit).execute()
 
             if hasattr(result, "error") and result.error:
                 logger.error(f"Erro ao buscar logs SLA: {result.error}")
@@ -2164,7 +2327,9 @@ class SupabaseClient:
             dict: Resumo da execução
         """
         try:
-            logs = self.get_sla_calculation_logs(company_id, execution_id=execution_id, limit=1000)
+            logs = self.get_sla_calculation_logs(company_id,
+                                                 execution_id=execution_id,
+                                                 limit=1000)
 
             if not logs:
                 return {}
@@ -2205,7 +2370,8 @@ class SupabaseClient:
                     # Extrair leads perdidos do additional_data
                     additional_data = log.get('additional_data', {})
                     if isinstance(additional_data, dict):
-                        summary['leads_perdidos'] = additional_data.get('leads_perdidos', 0)
+                        summary['leads_perdidos'] = additional_data.get(
+                            'leads_perdidos', 0)
 
                 # Coletar erros e warnings
                 if level == 'ERROR':
@@ -2218,8 +2384,6 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Erro ao gerar resumo da execução SLA: {str(e)}")
             return {}
-
-
 
     def _process_lead_sla_state_machine(self, lead_id, lead_activities,
                                         sem_contato_stage_id,
