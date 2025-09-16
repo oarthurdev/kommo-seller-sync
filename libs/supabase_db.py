@@ -1979,20 +1979,28 @@ class SupabaseClient:
                                             logger.info(f"🔎 Target broker name: '{broker_name}'")
                                             logger.info(f"🔎 Match? {corretor_value == broker_name}")
                                         
-                                        # Comparar com o nome do broker atual
-                                        if corretor_value == broker_name:
+                                        # Extrair apenas o primeiro nome do broker para comparação
+                                        broker_first_name = broker_name.split()[0] if broker_name else ""
+                                        
+                                        if detailed_debug:
+                                            logger.info(f"🔎 Broker first name extracted: '{broker_first_name}'")
+                                        
+                                        # Comparar corretor_value com apenas o primeiro nome do broker
+                                        if corretor_value == broker_first_name:
                                             total_count += 1
                                             match_info = {
                                                 'lead_id': lead_id,
                                                 'corretor_value': corretor_value,
+                                                'broker_first_name': broker_first_name,
+                                                'broker_full_name': broker_name,
                                                 'processed_index': processed_count
                                             }
                                             debug_samples.append(match_info)
                                             
                                             if detailed_debug:
-                                                logger.info(f"✅ MATCH! Lead {lead_id} matched for broker {broker_name}")
+                                                logger.info(f"✅ MATCH! Lead {lead_id} matched - '{corretor_value}' == '{broker_first_name}' (full: {broker_name})")
                                             elif total_count <= 10:  # Log first 10 matches even if not in detailed mode
-                                                logger.info(f"✅ Match #{total_count}: Lead {lead_id} → '{corretor_value}'")
+                                                logger.info(f"✅ Match #{total_count}: Lead {lead_id} → '{corretor_value}' == '{broker_first_name}' ({broker_name})")
                                             
                                             break  # Sair do loop de campos
                                     else:
@@ -2026,7 +2034,7 @@ class SupabaseClient:
                     if debug_samples:
                         logger.info(f"🎯 Sample matches:")
                         for i, sample in enumerate(debug_samples[:10]):  # Show first 10 matches
-                            logger.info(f"   [{i+1}] Lead {sample['lead_id']} → '{sample['corretor_value']}'")
+                            logger.info(f"   [{i+1}] Lead {sample['lead_id']} → '{sample['corretor_value']}' == '{sample['broker_first_name']}' ({sample['broker_full_name']})")
                         if len(debug_samples) > 10:
                             logger.info(f"   ... and {len(debug_samples) - 10} more matches")
                     
