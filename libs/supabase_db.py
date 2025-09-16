@@ -1869,14 +1869,27 @@ class SupabaseClient:
                     # Percorrer todos os leads para encontrar os que têm este corretor responsável
                     for idx, lead in all_leads.iterrows():
                         try:
-                            custom_fields_str = lead.get('custom_fields_values', '')
+                            custom_fields_value = lead.get('custom_fields_values', '')
                             
                             # Verificar se o campo não está vazio ou é nulo
-                            if not custom_fields_str or custom_fields_str is None or str(custom_fields_str).strip() == '' or str(custom_fields_str).lower() == 'nan':
+                            if not custom_fields_value or custom_fields_value is None:
                                 continue
-                                
-                            # Parse do JSON
-                            custom_fields = json.loads(custom_fields_str)
+                            
+                            # Se for string, converter para lower para comparação
+                            if isinstance(custom_fields_value, str):
+                                if custom_fields_value.strip() == '' or custom_fields_value.lower() in ['nan', 'null', 'none']:
+                                    continue
+                                # Parse do JSON string
+                                custom_fields = json.loads(custom_fields_value)
+                            elif isinstance(custom_fields_value, (dict, list)):
+                                # Já é um objeto Python (parsed JSON)
+                                custom_fields = custom_fields_value
+                            else:
+                                # Tentar converter para string e fazer parse
+                                custom_fields_str = str(custom_fields_value)
+                                if custom_fields_str.strip() == '' or custom_fields_str.lower() in ['nan', 'null', 'none']:
+                                    continue
+                                custom_fields = json.loads(custom_fields_str)
                             
                             # Verificar se é uma lista
                             if not isinstance(custom_fields, list):
@@ -1896,10 +1909,12 @@ class SupabaseClient:
                                     # Comparar com o nome do broker atual
                                     if corretor_value == broker_name:
                                         total_count += 1
+                                        logger.debug(f"Found lead {lead.get('id', 'unknown')} for broker {broker_name}")
                                         break  # Sair do loop de campos
                                         
-                        except (json.JSONDecodeError, TypeError, KeyError) as e:
+                        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as e:
                             # Ignorar leads com JSON inválido ou estrutura incorreta
+                            logger.debug(f"Error parsing custom_fields for lead {lead.get('id', 'unknown')}: {e}")
                             continue
                     
                     logger.info(f"Total leads found for broker {broker_name}: {total_count}")
