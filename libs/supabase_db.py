@@ -1849,79 +1849,198 @@ class SupabaseClient:
                 # Nova regra: contar leads com base no custom_fields_values
                 # Buscar o nome do broker para comparação
                 try:
+                    logger.info(f"🔍 === INICIANDO DEBUG DETALHADO TOTAL_LEADS ===")
+                    logger.info(f"🔍 Broker ID: {broker_id}")
+                    logger.info(f"🔍 Broker Name: '{broker_name}'")
+                    logger.info(f"🔍 Company ID: {company_id}")
+                    
                     if not broker_name:
-                        logger.warning(f"Broker name not provided for total_leads calculation")
+                        logger.warning(f"❌ Broker name not provided for total_leads calculation")
                         return 0
                     
                     # Verificar se todos os leads estão disponíveis
                     if all_leads.empty:
-                        logger.warning("No leads available for total_leads calculation")
+                        logger.warning("❌ No leads available for total_leads calculation")
                         return 0
+                    
+                    logger.info(f"📊 Total leads available for analysis: {len(all_leads)}")
                     
                     # Verificar se a coluna custom_fields_values existe
                     if 'custom_fields_values' not in all_leads.columns:
-                        logger.warning("Column 'custom_fields_values' not found in leads")
+                        logger.warning("❌ Column 'custom_fields_values' not found in leads")
+                        logger.info(f"📋 Available columns: {list(all_leads.columns)}")
                         return 0
+                    
+                    logger.info(f"✅ Column 'custom_fields_values' found in leads")
                     
                     import json
                     total_count = 0
+                    processed_count = 0
+                    skipped_empty = 0
+                    skipped_invalid_json = 0
+                    skipped_not_list = 0
+                    skipped_no_corretor_field = 0
+                    debug_samples = []
                     
                     # Percorrer todos os leads para encontrar os que têm este corretor responsável
                     for idx, lead in all_leads.iterrows():
+                        processed_count += 1
+                        lead_id = lead.get('id', 'unknown')
+                        
+                        # Debug detalhado apenas para os primeiros 5 leads
+                        detailed_debug = processed_count <= 5
+                        
+                        if detailed_debug:
+                            logger.info(f"🔎 === PROCESSANDO LEAD #{processed_count} (ID: {lead_id}) ===")
+                        
                         try:
                             custom_fields_value = lead.get('custom_fields_values', '')
                             
+                            if detailed_debug:
+                                logger.info(f"🔎 custom_fields_value type: {type(custom_fields_value)}")
+                                if isinstance(custom_fields_value, str):
+                                    logger.info(f"🔎 custom_fields_value length: {len(custom_fields_value)}")
+                                    logger.info(f"🔎 custom_fields_value preview: {custom_fields_value[:200]}...")
+                                else:
+                                    logger.info(f"🔎 custom_fields_value value: {custom_fields_value}")
+                            
                             # Verificar se o campo não está vazio ou é nulo
                             if not custom_fields_value or custom_fields_value is None:
+                                skipped_empty += 1
+                                if detailed_debug:
+                                    logger.info(f"⏭️  Skipping - empty or null custom_fields_value")
                                 continue
                             
                             # Se for string, converter para lower para comparação
                             if isinstance(custom_fields_value, str):
                                 if custom_fields_value.strip() == '' or custom_fields_value.lower() in ['nan', 'null', 'none']:
+                                    skipped_empty += 1
+                                    if detailed_debug:
+                                        logger.info(f"⏭️  Skipping - empty string or null-like value")
                                     continue
                                 # Parse do JSON string
+                                if detailed_debug:
+                                    logger.info(f"🔄 Parsing JSON string...")
                                 custom_fields = json.loads(custom_fields_value)
                             elif isinstance(custom_fields_value, (dict, list)):
                                 # Já é um objeto Python (parsed JSON)
+                                if detailed_debug:
+                                    logger.info(f"✅ Already parsed as {type(custom_fields_value)}")
                                 custom_fields = custom_fields_value
                             else:
                                 # Tentar converter para string e fazer parse
+                                if detailed_debug:
+                                    logger.info(f"🔄 Converting {type(custom_fields_value)} to string and parsing...")
                                 custom_fields_str = str(custom_fields_value)
                                 if custom_fields_str.strip() == '' or custom_fields_str.lower() in ['nan', 'null', 'none']:
+                                    skipped_empty += 1
+                                    if detailed_debug:
+                                        logger.info(f"⏭️  Skipping - converted string is empty or null-like")
                                     continue
                                 custom_fields = json.loads(custom_fields_str)
                             
                             # Verificar se é uma lista
                             if not isinstance(custom_fields, list):
+                                skipped_not_list += 1
+                                if detailed_debug:
+                                    logger.info(f"⏭️  Skipping - custom_fields is not a list (type: {type(custom_fields)})")
                                 continue
-                                
+                            
+                            if detailed_debug:
+                                logger.info(f"📝 custom_fields is a list with {len(custom_fields)} items")
+                                for i, field in enumerate(custom_fields):
+                                    if isinstance(field, dict):
+                                        field_name = field.get('field_name', 'NO_NAME')
+                                        logger.info(f"   [{i}] field_name: '{field_name}'")
+                                    else:
+                                        logger.info(f"   [{i}] field is not dict: {type(field)}")
+                                        
                             # Procurar pelo campo "Corretor responsável"
-                            for field in custom_fields:
+                            found_corretor_field = False
+                            for field_idx, field in enumerate(custom_fields):
                                 if (isinstance(field, dict) and 
-                                    field.get('field_name') == 'Corretor responsável' and
-                                    'values' in field and 
-                                    isinstance(field['values'], list) and
-                                    len(field['values']) > 0):
+                                    field.get('field_name') == 'Corretor responsável'):
                                     
-                                    # Extrair o valor do corretor
-                                    corretor_value = field['values'][0].get('value', '')
+                                    found_corretor_field = True
                                     
-                                    # Comparar com o nome do broker atual
-                                    if corretor_value == broker_name:
-                                        total_count += 1
-                                        logger.debug(f"Found lead {lead.get('id', 'unknown')} for broker {broker_name}")
-                                        break  # Sair do loop de campos
+                                    if detailed_debug:
+                                        logger.info(f"✅ Found 'Corretor responsável' field at index {field_idx}")
+                                        logger.info(f"🔎 Field structure: {field}")
+                                    
+                                    if ('values' in field and 
+                                        isinstance(field['values'], list) and
+                                        len(field['values']) > 0):
+                                        
+                                        # Extrair o valor do corretor
+                                        corretor_value = field['values'][0].get('value', '')
+                                        
+                                        if detailed_debug:
+                                            logger.info(f"🔎 Corretor value: '{corretor_value}'")
+                                            logger.info(f"🔎 Target broker name: '{broker_name}'")
+                                            logger.info(f"🔎 Match? {corretor_value == broker_name}")
+                                        
+                                        # Comparar com o nome do broker atual
+                                        if corretor_value == broker_name:
+                                            total_count += 1
+                                            match_info = {
+                                                'lead_id': lead_id,
+                                                'corretor_value': corretor_value,
+                                                'processed_index': processed_count
+                                            }
+                                            debug_samples.append(match_info)
+                                            
+                                            if detailed_debug:
+                                                logger.info(f"✅ MATCH! Lead {lead_id} matched for broker {broker_name}")
+                                            elif total_count <= 10:  # Log first 10 matches even if not in detailed mode
+                                                logger.info(f"✅ Match #{total_count}: Lead {lead_id} → '{corretor_value}'")
+                                            
+                                            break  # Sair do loop de campos
+                                    else:
+                                        if detailed_debug:
+                                            logger.info(f"⚠️  'Corretor responsável' field found but no valid values")
+                                        break
+                                        
+                            if not found_corretor_field:
+                                skipped_no_corretor_field += 1
+                                if detailed_debug:
+                                    logger.info(f"⏭️  No 'Corretor responsável' field found in this lead")
                                         
                         except (json.JSONDecodeError, TypeError, KeyError, ValueError) as e:
-                            # Ignorar leads com JSON inválido ou estrutura incorreta
-                            logger.debug(f"Error parsing custom_fields for lead {lead.get('id', 'unknown')}: {e}")
+                            skipped_invalid_json += 1
+                            if detailed_debug:
+                                logger.info(f"❌ Error parsing custom_fields for lead {lead_id}: {e}")
+                            elif skipped_invalid_json <= 5:  # Log first 5 errors
+                                logger.debug(f"❌ Parse error #{skipped_invalid_json} for lead {lead_id}: {e}")
                             continue
                     
-                    logger.info(f"Total leads found for broker {broker_name}: {total_count}")
+                    # Resumo final detalhado
+                    logger.info(f"🎯 === RESUMO FINAL TOTAL_LEADS ===")
+                    logger.info(f"🎯 Broker: {broker_name} (ID: {broker_id})")
+                    logger.info(f"🎯 Total leads processados: {processed_count}")
+                    logger.info(f"🎯 Leads encontrados: {total_count}")
+                    logger.info(f"🎯 Skipped empty/null: {skipped_empty}")
+                    logger.info(f"🎯 Skipped invalid JSON: {skipped_invalid_json}")
+                    logger.info(f"🎯 Skipped not list: {skipped_not_list}")
+                    logger.info(f"🎯 Skipped no corretor field: {skipped_no_corretor_field}")
+                    
+                    if debug_samples:
+                        logger.info(f"🎯 Sample matches:")
+                        for i, sample in enumerate(debug_samples[:10]):  # Show first 10 matches
+                            logger.info(f"   [{i+1}] Lead {sample['lead_id']} → '{sample['corretor_value']}'")
+                        if len(debug_samples) > 10:
+                            logger.info(f"   ... and {len(debug_samples) - 10} more matches")
+                    
+                    # Cálculo de estatísticas
+                    success_rate = (total_count / processed_count * 100) if processed_count > 0 else 0
+                    logger.info(f"🎯 Success rate: {success_rate:.2f}%")
+                    
+                    logger.info(f"🎯 === FIM DEBUG TOTAL_LEADS ===")
                     return total_count
                     
                 except Exception as e:
-                    logger.error(f"Error in total_leads calculation: {e}")
+                    logger.error(f"❌ FATAL ERROR in total_leads calculation: {e}")
+                    import traceback
+                    logger.error(f"❌ Traceback: {traceback.format_exc()}")
                     return 0
 
             # Remove legacy rules that don't exist in new schema
