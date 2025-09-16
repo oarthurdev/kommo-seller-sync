@@ -1110,7 +1110,7 @@ class SupabaseClient:
                             count = self._calculate_rule_points(
                                 rule_name, rule_config, broker_leads,
                                 broker_activities, leads, activities, company_id,
-                                broker_id
+                                broker_id, broker_name
                             )
 
                         rule_results[rule_name] = count
@@ -1681,7 +1681,8 @@ class SupabaseClient:
                                all_leads,
                                all_activities,
                                company_id,
-                               broker_id=None):
+                               broker_id=None,
+                               broker_name=None):
         """Calculate count for a specific rule - returns the number of occurrences, not points"""
         try:
             # Ensure datetime columns are properly converted with better error handling
@@ -1842,6 +1843,70 @@ class SupabaseClient:
                         discarded_leads = broker_leads[broker_leads['status']
                                                        == 'Perdido']
                         return len(discarded_leads)
+                    return 0
+
+            elif rule_name == "total_leads":
+                # Nova regra: contar leads com base no custom_fields_values
+                # Buscar o nome do broker para comparação
+                try:
+                    if not broker_name:
+                        logger.warning(f"Broker name not provided for total_leads calculation")
+                        return 0
+                    
+                    # Verificar se todos os leads estão disponíveis
+                    if all_leads.empty:
+                        logger.warning("No leads available for total_leads calculation")
+                        return 0
+                    
+                    # Verificar se a coluna custom_fields_values existe
+                    if 'custom_fields_values' not in all_leads.columns:
+                        logger.warning("Column 'custom_fields_values' not found in leads")
+                        return 0
+                    
+                    import json
+                    total_count = 0
+                    
+                    # Percorrer todos os leads para encontrar os que têm este corretor responsável
+                    for idx, lead in all_leads.iterrows():
+                        try:
+                            custom_fields_str = lead.get('custom_fields_values', '')
+                            
+                            # Verificar se o campo não está vazio
+                            if not custom_fields_str or pd.isna(custom_fields_str):
+                                continue
+                                
+                            # Parse do JSON
+                            custom_fields = json.loads(custom_fields_str)
+                            
+                            # Verificar se é uma lista
+                            if not isinstance(custom_fields, list):
+                                continue
+                                
+                            # Procurar pelo campo "Corretor responsável"
+                            for field in custom_fields:
+                                if (isinstance(field, dict) and 
+                                    field.get('field_name') == 'Corretor responsável' and
+                                    'values' in field and 
+                                    isinstance(field['values'], list) and
+                                    len(field['values']) > 0):
+                                    
+                                    # Extrair o valor do corretor
+                                    corretor_value = field['values'][0].get('value', '')
+                                    
+                                    # Comparar com o nome do broker atual
+                                    if corretor_value == broker_name:
+                                        total_count += 1
+                                        break  # Sair do loop de campos
+                                        
+                        except (json.JSONDecodeError, TypeError, KeyError) as e:
+                            # Ignorar leads com JSON inválido ou estrutura incorreta
+                            continue
+                    
+                    logger.info(f"Total leads found for broker {broker_name}: {total_count}")
+                    return total_count
+                    
+                except Exception as e:
+                    logger.error(f"Error in total_leads calculation: {e}")
                     return 0
 
             # Remove legacy rules that don't exist in new schema

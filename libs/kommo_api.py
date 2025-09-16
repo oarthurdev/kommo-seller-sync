@@ -131,9 +131,11 @@ class KommoAPI:
 
                 # Usa o novo handler de erros específicos da Kommo
                 if status_code in (429, 403, 504):
-                    company_id = getattr(self, 'api_config', {}).get('company_id', 'unknown')
-                    sync_file_logger.log_api_error(company_id, endpoint, status_code, attempt)
-                    
+                    company_id = getattr(self, 'api_config',
+                                         {}).get('company_id', 'unknown')
+                    sync_file_logger.log_api_error(company_id, endpoint,
+                                                   status_code, attempt)
+
                     if not self.rate_monitor.handle_kommo_error(
                             status_code, endpoint, attempt):
                         logger.error(
@@ -288,27 +290,33 @@ class KommoAPI:
                         # Handle both ISO format and timezone-aware strings
                         if 'T' in last_sync_str:
                             if last_sync_str.endswith('Z'):
-                                last_sync_date = datetime.fromisoformat(last_sync_str.replace('Z', '+00:00'))
-                            elif '+' in last_sync_str or last_sync_str.endswith('UTC'):
-                                last_sync_date = datetime.fromisoformat(last_sync_str.replace('UTC', '+00:00'))
+                                last_sync_date = datetime.fromisoformat(
+                                    last_sync_str.replace('Z', '+00:00'))
+                            elif '+' in last_sync_str or last_sync_str.endswith(
+                                    'UTC'):
+                                last_sync_date = datetime.fromisoformat(
+                                    last_sync_str.replace('UTC', '+00:00'))
                             else:
                                 # Assume UTC if no timezone info
-                                last_sync_date = datetime.fromisoformat(last_sync_str).replace(tzinfo=timezone.utc)
+                                last_sync_date = datetime.fromisoformat(
+                                    last_sync_str).replace(tzinfo=timezone.utc)
                         else:
                             # Handle timestamp format
-                            last_sync_date = datetime.fromtimestamp(float(last_sync_str), tz=timezone.utc)
-                        
+                            last_sync_date = datetime.fromtimestamp(
+                                float(last_sync_str), tz=timezone.utc)
+
                         # Ensure the date is timezone-aware and not in the future
                         if last_sync_date.tzinfo is None:
-                            last_sync_date = last_sync_date.replace(tzinfo=timezone.utc)
-                            
+                            last_sync_date = last_sync_date.replace(
+                                tzinfo=timezone.utc)
+
                         now = datetime.now(timezone.utc)
                         if last_sync_date > now:
                             logger.warning(
                                 f"Last sync date {last_sync_date} is in the future, using current time"
                             )
                             last_sync_date = now
-                        
+
                         # Add safety margin of 60 seconds to avoid boundary misses
                         from_dt = last_sync_date - timedelta(seconds=60)
                         logger.info(
@@ -316,16 +324,16 @@ class KommoAPI:
                         )
                         return int(from_dt.timestamp())
                     except Exception as parse_error:
-                        logger.error(f"Error parsing last_sync date '{last_sync_str}': {parse_error}")
+                        logger.error(
+                            f"Error parsing last_sync date '{last_sync_str}': {parse_error}"
+                        )
                         # Fall through to fallback logic
                 else:
                     logger.info("No last_sync found in database")
-                    
+
             # If no last sync or error parsing, get events from last 7 days to avoid overload
             fallback_date = datetime.now(timezone.utc) - timedelta(days=7)
-            logger.info(
-                f"Using fallback date: {fallback_date}"
-            )
+            logger.info(f"Using fallback date: {fallback_date}")
             return int(fallback_date.timestamp())
         except Exception as e:
             logger.error(f"Error getting last sync timestamp: {e}")
@@ -425,10 +433,11 @@ class KommoAPI:
             if hasattr(self, 'supabase_client') and self.supabase_client:
                 try:
                     # Get pipeline_id from kommo_config table for this company
-                    result = self.supabase_client.client.schema("cf_kommo").table(
-                        "kommo_config").select("pipeline_id").eq(
-                            "company_id", company_id).eq("active",
-                                                         True).execute()
+                    result = self.supabase_client.client.schema(
+                        "cf_kommo").table("kommo_config").select(
+                            "pipeline_id").eq("company_id",
+                                              company_id).eq("active",
+                                                             True).execute()
 
                     if result.data and result.data[0].get('pipeline_id'):
                         pipeline_data = result.data[0]['pipeline_id']
@@ -636,6 +645,8 @@ class KommoAPI:
                     pipeline_id,
                     "etapa":
                     etapa,  # Format: stage_name (pipeline_name)
+                    "custom_fields_values":
+                    lead.get("custom_fields_values", {}),
                     "criado_em": (parse_datetime_sp(lead.get("created_at"))
                                   if lead.get("created_at") else None),
                     "atualizado_em": (parse_datetime_sp(lead.get("updated_at"))
@@ -697,17 +708,21 @@ class KommoAPI:
                     now_ts = int(datetime.now(timezone.utc).timestamp())
                     # Check if timestamp is more than 1 day in future or more than 1 year in past
                     if ts > now_ts + 86400:  # 1 day in future
-                        logger.warning(f"Timestamp {ts} is in the future, using current time")
+                        logger.warning(
+                            f"Timestamp {ts} is in the future, using current time"
+                        )
                         return now_ts
                     elif ts < now_ts - 31536000:  # 1 year in past
-                        logger.warning(f"Timestamp {ts} is too old, using 7 days ago")
+                        logger.warning(
+                            f"Timestamp {ts} is too old, using 7 days ago")
                         return now_ts - 604800  # 7 days ago
                     return ts
                 if isinstance(dt_or_ts, str):
                     if dt_or_ts.isdigit():
                         return _to_unix_seconds(int(dt_or_ts))
                     try:
-                        dt = datetime.fromisoformat(dt_or_ts.replace('Z', '+00:00'))
+                        dt = datetime.fromisoformat(
+                            dt_or_ts.replace('Z', '+00:00'))
                         return _to_unix_seconds(int(dt.timestamp()))
                     except Exception:
                         return None
@@ -721,16 +736,18 @@ class KommoAPI:
             base_from_ts = _to_unix_seconds(
                 last_sync_date) or _to_unix_seconds(from_store) or 0
             from_timestamp = base_from_ts + 1 if base_from_ts else 0
-            
+
             # Convert back to datetime for logging
             if from_timestamp:
                 from datetime import datetime, timezone
-                from_dt = datetime.fromtimestamp(from_timestamp, tz=timezone.utc)
+                from_dt = datetime.fromtimestamp(from_timestamp,
+                                                 tz=timezone.utc)
                 logger.info(
                     f"Starting incremental sync from (unix): {from_timestamp} ({from_dt.isoformat()})"
                 )
             else:
-                logger.info("Starting incremental sync from beginning (no timestamp)")
+                logger.info(
+                    "Starting incremental sync from beginning (no timestamp)")
 
             # 4) paginação
             limits = self._get_safe_pagination_limits()
@@ -814,14 +831,16 @@ class KommoAPI:
             for event_type in requested_event_types:
                 logger.info(
                     f"Fetching type='{event_type}' from {from_timestamp}")
-                
+
                 # Special debugging for outgoing_chat_message
                 if event_type == "outgoing_chat_message":
-                    from_dt = datetime.fromtimestamp(from_timestamp, tz=timezone.utc) if from_timestamp else None
+                    from_dt = datetime.fromtimestamp(
+                        from_timestamp,
+                        tz=timezone.utc) if from_timestamp else None
                     logger.info(
                         f"DEBUG outgoing_chat_message: timestamp={from_timestamp}, date={from_dt}, company_id={company_id}"
                     )
-                
+
                 page = 1
                 while page <= max_pages:
                     params = {
@@ -837,10 +856,11 @@ class KommoAPI:
                     if from_timestamp:
                         params["filter[created_at][from]"] = from_timestamp
                     params["order[created_at]"] = "desc"
-                    
+
                     # Debug logging for outgoing_chat_message
                     if event_type == "outgoing_chat_message":
-                        logger.info(f"DEBUG outgoing_chat_message params: {params}")
+                        logger.info(
+                            f"DEBUG outgoing_chat_message params: {params}")
 
                     try:
                         resp = self._make_request("events", params=params)
@@ -858,14 +878,19 @@ class KommoAPI:
                     # Handle None response (204 No Content) - but continue for first few pages
                     if resp is None:
                         logger.info(
-                            f"{event_type} page {page}: received 204 No Content")
+                            f"{event_type} page {page}: received 204 No Content"
+                        )
                         if page <= 2:  # Continue for first 2 pages in case of temporary 204
-                            logger.info(f"Continuing pagination for {event_type} despite 204 on page {page}")
+                            logger.info(
+                                f"Continuing pagination for {event_type} despite 204 on page {page}"
+                            )
                             page += 1
                             time.sleep(limits.get("delay_between_pages", 0.3))
                             continue
                         else:
-                            logger.info(f"{event_type}: stopping pagination due to 204")
+                            logger.info(
+                                f"{event_type}: stopping pagination due to 204"
+                            )
                             break
 
                     if not isinstance(resp, dict) or not resp.get("_embedded"):
@@ -943,15 +968,23 @@ class KommoAPI:
 
                             # Extract from valor_anterior (vb_raw)
                             if isinstance(vb_raw, list) and len(vb_raw) > 0:
-                                if isinstance(vb_raw[0], dict) and "lead_status" in vb_raw[0]:
-                                    if isinstance(vb_raw[0]["lead_status"], dict):
-                                        status_before = vb_raw[0]["lead_status"].get("id")
+                                if isinstance(
+                                        vb_raw[0],
+                                        dict) and "lead_status" in vb_raw[0]:
+                                    if isinstance(vb_raw[0]["lead_status"],
+                                                  dict):
+                                        status_before = vb_raw[0][
+                                            "lead_status"].get("id")
 
                             # Extract from valor_novo (va_raw)
                             if isinstance(va_raw, list) and len(va_raw) > 0:
-                                if isinstance(va_raw[0], dict) and "lead_status" in va_raw[0]:
-                                    if isinstance(va_raw[0]["lead_status"], dict):
-                                        status_after = va_raw[0]["lead_status"].get("id")
+                                if isinstance(
+                                        va_raw[0],
+                                        dict) and "lead_status" in va_raw[0]:
+                                    if isinstance(va_raw[0]["lead_status"],
+                                                  dict):
+                                        status_after = va_raw[0][
+                                            "lead_status"].get("id")
 
                         if activity_type == "entity_responsible_changed":
                             # Extract responsible user IDs from the JSON structure
@@ -960,15 +993,25 @@ class KommoAPI:
 
                             # Extract from valor_anterior (vb_raw)
                             if isinstance(vb_raw, list) and len(vb_raw) > 0:
-                                if isinstance(vb_raw[0], dict) and "responsible_user" in vb_raw[0]:
-                                    if isinstance(vb_raw[0]["responsible_user"], dict):
-                                        old_responsible = vb_raw[0]["responsible_user"].get("id")
+                                if isinstance(
+                                        vb_raw[0], dict
+                                ) and "responsible_user" in vb_raw[0]:
+                                    if isinstance(
+                                            vb_raw[0]["responsible_user"],
+                                            dict):
+                                        old_responsible = vb_raw[0][
+                                            "responsible_user"].get("id")
 
                             # Extract from valor_novo (va_raw)
                             if isinstance(va_raw, list) and len(va_raw) > 0:
-                                if isinstance(va_raw[0], dict) and "responsible_user" in va_raw[0]:
-                                    if isinstance(va_raw[0]["responsible_user"], dict):
-                                        new_responsible = va_raw[0]["responsible_user"].get("id")
+                                if isinstance(
+                                        va_raw[0], dict
+                                ) and "responsible_user" in va_raw[0]:
+                                    if isinstance(
+                                            va_raw[0]["responsible_user"],
+                                            dict):
+                                        new_responsible = va_raw[0][
+                                            "responsible_user"].get("id")
 
                         criado_em = to_dt_from_unix(ev.get("created_at"))
 
