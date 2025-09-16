@@ -1871,8 +1871,8 @@ class SupabaseClient:
                         try:
                             custom_fields_str = lead.get('custom_fields_values', '')
                             
-                            # Verificar se o campo não está vazio
-                            if not custom_fields_str or pd.isna(custom_fields_str):
+                            # Verificar se o campo não está vazio ou é nulo
+                            if not custom_fields_str or custom_fields_str is None or str(custom_fields_str).strip() == '' or str(custom_fields_str).lower() == 'nan':
                                 continue
                                 
                             # Parse do JSON
