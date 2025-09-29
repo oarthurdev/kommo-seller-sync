@@ -1834,6 +1834,10 @@ class SupabaseClient:
                 logger.info(
                     f"🔍 Calculando leads_perdidos para broker: {broker_name}")
 
+                # Extrair primeiro nome do broker para comparação fallback
+                broker_first_name = broker_name.split()[0] if broker_name else ""
+                logger.info(f"🔍 Primeiro nome do broker: '{broker_first_name}'")
+
                 # Verificar se a coluna custom_fields_values existe
                 if 'custom_fields_values' not in all_leads.columns:
                     logger.warning(
@@ -1883,11 +1887,17 @@ class SupabaseClient:
                                         for value_obj in values:
                                             if isinstance(value_obj, dict):
                                                 corretor_name = value_obj.get("value")
-                                                # Comparar com o nome completo do broker
-                                                if corretor_name and corretor_name == broker_name:
-                                                    total_count += 1
-                                                    logger.debug(f"Lead {lead_id}: Broker '{broker_name}' encontrado em 'Esse lead foi perdido por'")
-                                                    break  # Contar apenas uma vez por lead para este broker
+                                                if corretor_name:
+                                                    # Primeira tentativa: comparar com o nome completo do broker
+                                                    if corretor_name == broker_name:
+                                                        total_count += 1
+                                                        logger.debug(f"Lead {lead_id}: Broker '{broker_name}' (nome completo) encontrado em 'Esse lead foi perdido por'")
+                                                        break  # Contar apenas uma vez por lead para este broker
+                                                    # Segunda tentativa: comparar apenas com o primeiro nome
+                                                    elif corretor_name == broker_first_name:
+                                                        total_count += 1
+                                                        logger.debug(f"Lead {lead_id}: Broker '{broker_first_name}' (primeiro nome) encontrado em 'Esse lead foi perdido por' (valor: '{corretor_name}')")
+                                                        break  # Contar apenas uma vez por lead para este broker
                                     break  # Encontrou o campo, pode parar de procurar
 
                     except Exception as e:
