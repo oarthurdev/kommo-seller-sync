@@ -1818,45 +1818,82 @@ class SupabaseClient:
                     return 0
 
             elif rule_name == "leads_perdidos":
-                # Nova lógica: leads perdidos por inatividade (27 minutos sem resposta)
-                current_broker_id = broker_id
-
-                # Fallback apenas se broker_id for None
-                if current_broker_id is None:
-                    # Tentar extrair das atividades do broker
-                    if not broker_activities.empty and 'user_id' in broker_activities.columns:
-                        user_ids = broker_activities['user_id'].dropna(
-                        ).unique()
-                        if len(user_ids) > 0:
-                            current_broker_id = user_ids[0]
-
-                    # Tentar extrair dos leads
-                    elif not broker_leads.empty and 'responsavel_id' in broker_leads.columns:
-                        responsavel_ids = broker_leads[
-                            'responsavel_id'].dropna().unique()
-                        if len(responsavel_ids) > 0:
-                            current_broker_id = responsavel_ids[0]
-
-                if current_broker_id is None:
-                    logger.error(
-                        "❌ Nenhum broker ID disponível - retornando 0")
-                    return 0
-
-                # Converter broker_id para o tipo correto
-                try:
-                    current_broker_id = int(current_broker_id) if isinstance(
-                        current_broker_id, (str, float)) else current_broker_id
-                except (ValueError, TypeError):
-                    logger.error(
-                        f"Erro ao converter broker_id {current_broker_id} para int"
+                # Nova lógica: leads perdidos baseado no custom_field "Esse lead foi perdido por"
+                if not broker_name:
+                    logger.warning(
+                        f"❌ Broker name not provided for leads_perdidos calculation"
                     )
                     return 0
 
-                # Calcular usando função RPC otimizada
-                result = self._calculate_leads_perdidos_por_inatividade(
-                    current_broker_id, None, company_id)
+                # Verificar se todos os leads estão disponíveis
+                if all_leads.empty:
+                    logger.warning(
+                        "❌ No leads available for leads_perdidos calculation")
+                    return 0
 
-                return result
+                logger.info(
+                    f"🔍 Calculando leads_perdidos para broker: {broker_name}")
+
+                # Verificar se a coluna custom_fields_values existe
+                if 'custom_fields_values' not in all_leads.columns:
+                    logger.warning(
+                        "❌ Column 'custom_fields_values' not found in leads for leads_perdidos")
+                    return 0
+
+                import json
+                total_count = 0
+                processed_count = 0
+
+                # Percorrer todos os leads para encontrar campo "Esse lead foi perdido por"
+                for idx, lead in all_leads.iterrows():
+                    processed_count += 1
+                    lead_id = lead.get('id', 'unknown')
+
+                    try:
+                        custom_fields_value = lead.get('custom_fields_values')
+                        
+                        # Se o valor já for None ou vazio, pular
+                        if custom_fields_value is None:
+                            continue
+
+                        # Se for string, tentar parsear como JSON
+                        if isinstance(custom_fields_value, str):
+                            try:
+                                custom_fields = json.loads(custom_fields_value)
+                            except json.JSONDecodeError:
+                                continue
+                        elif isinstance(custom_fields_value, list):
+                            custom_fields = custom_fields_value
+                        else:
+                            continue
+
+                        # Verificar se é uma lista
+                        if not isinstance(custom_fields, list):
+                            continue
+
+                        # Procurar campo "Esse lead foi perdido por"
+                        for field in custom_fields:
+                            if isinstance(field, dict):
+                                field_name = field.get("field_name")
+                                if field_name == "Esse lead foi perdido por":
+                                    values = field.get("values", [])
+                                    if values:
+                                        # Iterar por todos os values (multiselect)
+                                        for value_obj in values:
+                                            if isinstance(value_obj, dict):
+                                                corretor_name = value_obj.get("value")
+                                                if corretor_name and corretor_name == broker_name:
+                                                    total_count += 1
+                                                    logger.debug(f"Lead {lead_id}: Broker '{broker_name}' encontrado em 'Esse lead foi perdido por'")
+                                    break  # Encontrou o campo, pode parar de procurar
+
+                    except Exception as e:
+                        logger.warning(f"Erro processando custom_fields do lead {lead_id}: {e}")
+                        continue
+
+                logger.info(
+                    f"🎯 Leads perdidos encontrados para {broker_name}: {total_count} (de {processed_count} leads processados)")
+                return total_count
 
             elif rule_name == "leads_descartados":
                 # Antiga lógica de leads_perdidos - leads descartados por status
