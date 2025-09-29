@@ -1818,7 +1818,7 @@ class SupabaseClient:
                     return 0
 
             elif rule_name == "leads_perdidos":
-                # Nova lógica: leads perdidos baseado no custom_field "Esse lead foi perdido por"
+                # Lógica baseada no custom_field "Esse lead foi perdido por" (multiselect)
                 if not broker_name:
                     logger.warning(
                         f"❌ Broker name not provided for leads_perdidos calculation"
@@ -1879,12 +1879,15 @@ class SupabaseClient:
                                     values = field.get("values", [])
                                     if values:
                                         # Iterar por todos os values (multiselect)
+                                        # Cada lead pode ter múltiplos corretores responsáveis pela perda
                                         for value_obj in values:
                                             if isinstance(value_obj, dict):
                                                 corretor_name = value_obj.get("value")
+                                                # Comparar com o nome completo do broker
                                                 if corretor_name and corretor_name == broker_name:
                                                     total_count += 1
                                                     logger.debug(f"Lead {lead_id}: Broker '{broker_name}' encontrado em 'Esse lead foi perdido por'")
+                                                    break  # Contar apenas uma vez por lead para este broker
                                     break  # Encontrou o campo, pode parar de procurar
 
                     except Exception as e:
@@ -2263,52 +2266,22 @@ class SupabaseClient:
     def _calculate_leads_perdidos_por_inatividade(self, broker_id,
                                                   all_activities, company_id):
         """
-        Calcula leads perdidos por inatividade usando função RPC otimizada do Supabase.
+        DEPRECATED: Esta função não é mais usada.
+        O cálculo de leads_perdidos agora é feito através do custom_fields_values
+        no método _calculate_rule_points com o field_name "Esse lead foi perdido por".
 
         Args:
             broker_id: ID do corretor
-            all_activities: DataFrame (IGNORADO - usa RPC direto)
+            all_activities: DataFrame (IGNORADO)
             company_id: ID da empresa
 
         Returns:
-            int: Número de leads perdidos por inatividade
+            int: Sempre retorna 0, pois não é mais utilizada
         """
-        try:
-            if broker_id is None:
-                logger.debug(f"Broker ID is None")
-                return 0
-
-            # Converter broker_id para o tipo correto
-            broker_id = int(broker_id) if isinstance(broker_id,
-                                                     (str,
-                                                      float)) else broker_id
-
-            logger.info(
-                f"🔄 Executando RPC calculate_sla_leads_perdidos para broker {broker_id}"
-            )
-
-            # Usar função RPC otimizada do Supabase com conversão de tipos
-            response = self.client.rpc('calculate_sla_leads_perdidos', {
-                'p_company_id': str(company_id),
-                'p_broker_id': int(broker_id)
-            }).execute()
-
-            if hasattr(response, 'error') and response.error:
-                logger.error(f"❌ Erro na RPC SLA: {response.error}")
-                return 0
-
-            leads_perdidos_count = response.data if response.data is not None else 0
-
-            logger.info(
-                f"✅ RPC finalizada - {leads_perdidos_count} leads perdidos para broker {broker_id}"
-            )
-
-            return leads_perdidos_count
-
-        except Exception as e:
-            logger.error(
-                f"❌ Erro no cálculo SLA para broker {broker_id}: {str(e)}")
-            return 0
+        logger.warning(
+            f"⚠️ _calculate_leads_perdidos_por_inatividade is deprecated and no longer used"
+        )
+        return 0
 
     def get_sla_calculation_logs(self,
                                  company_id,
