@@ -611,8 +611,22 @@ class KommoAPI:
             user_name_to_id = {}
             if not users_df.empty:
                 for _, user in users_df.iterrows():
-                    user_name_to_id[user['nome']] = user['id']
-                logger.info(f"Mapeamento de usuários criado: {len(user_name_to_id)} usuários")
+                    full_name = user['nome']
+                    user_id = user['id']
+                    
+                    # Mapear nome completo para ID
+                    user_name_to_id[full_name] = user_id
+                    
+                    # Mapear também apenas o primeiro nome para ID (para casos como "Matheus" ao invés de "Matheus Silva")
+                    first_name = full_name.split()[0] if full_name and ' ' in full_name else full_name
+                    if first_name and first_name != full_name:
+                        # Evitar conflitos - se já existe um primeiro nome igual, mantém apenas o nome completo
+                        if first_name not in user_name_to_id:
+                            user_name_to_id[first_name] = user_id
+                        else:
+                            logger.debug(f"Conflito de primeiro nome '{first_name}' - mantendo apenas mapeamento pelo nome completo")
+                            
+                logger.info(f"Mapeamento de usuários criado: {len(user_name_to_id)} entradas ({len(users_df)} usuários únicos)")
 
             processed_leads = []
             for lead in filtered_leads:
