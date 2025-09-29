@@ -1510,6 +1510,70 @@ class SupabaseClient:
             logger.error(f"Error updating sync status: {str(e)}")
             return False
 
+    def get_previous_stage_before_lost(self, custom_fields_values, company_id):
+        """
+        Encontra a etapa anterior onde o lead estava antes de ser perdido.
+        Analisa o custom_fields_values para encontrar o stage_name anterior ao "Perdidos".
+        
+        Args:
+            custom_fields_values: Lista de campos customizados do lead
+            company_id: ID da empresa
+            
+        Returns:
+            str: Nome da etapa anterior ou None se não encontrado
+        """
+        try:
+            if not custom_fields_values or not isinstance(custom_fields_values, list):
+                return None
+                
+            # Buscar o stage_name correspondente ao status "Perdidos" (stage_id = 143)
+            stages_result = self.client.table("stages_list").select("*").eq(
+                "company_id", company_id).eq("stage_id", 143).execute()
+                
+            if not stages_result.data:
+                logger.warning(f"Stage with ID 143 not found for company {company_id}")
+                return None
+                
+            perdidos_stage_name = stages_result.data[0]['stage_name']
+            logger.debug(f"Found 'Perdidos' stage name: {perdidos_stage_name}")
+            
+            # Encontrar todos os field_names que correspondem a stages
+            stage_field_names = []
+            for field in custom_fields_values:
+                if isinstance(field, dict):
+                    field_name = field.get("field_name")
+                    if field_name:
+                        # Verificar se este field_name existe como stage_name na tabela stages_list
+                        stage_check = self.client.table("stages_list").select("stage_name").eq(
+                            "company_id", company_id).eq("stage_name", field_name).execute()
+                        
+                        if stage_check.data:
+                            stage_field_names.append(field_name)
+                            logger.debug(f"Found stage field: {field_name}")
+            
+            # Se não há stages ou só tem "Perdidos", não há etapa anterior
+            if len(stage_field_names) <= 1:
+                return None
+                
+            # Encontrar a posição do stage "Perdidos" na lista
+            perdidos_index = None
+            for i, stage_name in enumerate(stage_field_names):
+                if stage_name == perdidos_stage_name:
+                    perdidos_index = i
+                    break
+                    
+            # Se encontrou "Perdidos" e há uma etapa anterior
+            if perdidos_index is not None and perdidos_index > 0:
+                previous_stage = stage_field_names[perdidos_index - 1]
+                logger.debug(f"Previous stage before {perdidos_stage_name}: {previous_stage}")
+                return previous_stage
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding previous stage before lost: {e}")
+            return None
+
     def calculate_dynamic_metrics(self, company_id):
         """
         Calcula as métricas dinâmicas da empresa e salva na tabela metric_results
@@ -1731,6 +1795,90 @@ class SupabaseClient:
             logger.error(
                 f"Error calculating dynamic metrics for company {company_id}: {str(e)}"
             )
+
+    def analyze_lost_leads_funnel(self, company_id, date_filter_start=None, date_filter_end=None):
+        """
+        Analisa o funil de leads perdidos, identificando as etapas anteriores onde os leads foram perdidos.
+        
+        Args:
+            company_id: ID da empresa
+            date_filter_start: Data inicial do filtro (opcional)
+            date_filter_end: Data final do filtro (opcional)
+            
+        Returns:
+            dict: Análise do funil com contagem por etapa anterior
+        """
+        try:
+            logger.info(f"Starting lost leads funnel analysis for company {company_id}")
+            
+            # Buscar todos os leads perdidos (status_id = 143)
+            query = self.client.table("leads").select("*").eq(
+                "company_id", company_id).eq("status_id", 143)
+                
+            # Aplicar filtro de data se fornecido
+            if date_filter_start:
+                query = query.gte("criado_em", date_filter_start.isoformat())
+            if date_filter_end:
+                query = query.lte("criado_em", date_filter_end.isoformat())
+                
+            lost_leads_result = query.execute()
+            
+            if not lost_leads_result.data:
+                logger.info(f"No lost leads found for company {company_id}")
+                return {"total_lost_leads": 0, "previous_stages": {}}
+                
+            lost_leads = lost_leads_result.data
+            logger.info(f"Found {len(lost_leads)} lost leads for analysis")
+            
+            # Análise das etapas anteriores
+            previous_stages_count = {}
+            total_analyzed = 0
+            
+            for lead in lost_leads:
+                custom_fields_values = lead.get('custom_fields_values')
+                
+                if custom_fields_values:
+                    # Se for string JSON, fazer parse
+                    if isinstance(custom_fields_values, str):
+                        try:
+                            import json
+                            custom_fields_values = json.loads(custom_fields_values)
+                        except json.JSONDecodeError:
+                            continue
+                    
+                    # Encontrar a etapa anterior
+                    previous_stage = self.get_previous_stage_before_lost(
+                        custom_fields_values, company_id)
+                    
+                    if previous_stage:
+                        if previous_stage not in previous_stages_count:
+                            previous_stages_count[previous_stage] = 0
+                        previous_stages_count[previous_stage] += 1
+                        total_analyzed += 1
+                        
+                        logger.debug(f"Lead {lead.get('id')}: Previous stage = {previous_stage}")
+            
+            # Ordenar por quantidade (maior primeiro)
+            sorted_stages = dict(sorted(previous_stages_count.items(), 
+                                      key=lambda x: x[1], reverse=True))
+            
+            result = {
+                "total_lost_leads": len(lost_leads),
+                "total_analyzed": total_analyzed,
+                "previous_stages": sorted_stages,
+                "percentage_analyzed": (total_analyzed / len(lost_leads) * 100) if lost_leads else 0
+            }
+            
+            logger.info(f"Lost leads funnel analysis completed:")
+            logger.info(f"  - Total lost leads: {result['total_lost_leads']}")
+            logger.info(f"  - Successfully analyzed: {result['total_analyzed']}")
+            logger.info(f"  - Previous stages found: {list(sorted_stages.keys())}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error analyzing lost leads funnel for company {company_id}: {str(e)}")
+            return {"total_lost_leads": 0, "previous_stages": {}, "error": str(e)}
 
     def _calculate_rule_points(self,
                                rule_name,
