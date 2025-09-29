@@ -1513,7 +1513,8 @@ class SupabaseClient:
     def get_previous_stage_before_lost(self, custom_fields_values, company_id):
         """
         Encontra a etapa anterior onde o lead estava antes de ser perdido.
-        Analisa o custom_fields_values para encontrar o stage_name anterior ao "Perdidos".
+        Analisa o custom_fields_values para encontrar o stage_name anterior ao "Perdidos"
+        baseado na posição real no pipeline, não na ordem que aparecem no array.
         
         Args:
             custom_fields_values: Lista de campos customizados do lead
@@ -1538,61 +1539,75 @@ class SupabaseClient:
                 return None
                 
             # Buscar todas as stages da empresa para identificar quais são stages válidos
-            stages_result = self.client.table("stages_list").select("stage_name, stage_id, position").eq(
+            stages_result = self.client.table("stages_list").select("stage_name, stage_id, position, pipeline_id").eq(
                 "company_id", company_id).order("position").execute()
                 
             if not stages_result.data:
                 logger.warning(f"No stages found for company {company_id}")
                 return None
                 
-            # Criar mapa de stage_names válidos ordenados por posição
+            # Criar mapa de stage_names válidos
             valid_stages = {stage['stage_name']: stage for stage in stages_result.data}
             
             # Encontrar o stage_name correspondente ao status "Perdidos" (stage_id = 143)
             perdidos_stage = None
+            perdidos_pipeline_id = None
+            perdidos_position = None
+            
             for stage in stages_result.data:
                 if stage['stage_id'] == 143:
                     perdidos_stage = stage['stage_name']
+                    perdidos_pipeline_id = stage['pipeline_id']
+                    perdidos_position = stage['position']
                     break
                     
             if not perdidos_stage:
                 logger.warning(f"Stage with ID 143 (Perdidos) not found for company {company_id}")
                 return None
                 
-            logger.debug(f"Found 'Perdidos' stage name: {perdidos_stage}")
+            logger.debug(f"Found 'Perdidos' stage: {perdidos_stage} at position {perdidos_position} in pipeline {perdidos_pipeline_id}")
             
-            # Encontrar todos os field_names que correspondem a stages válidos
-            stage_field_names = []
+            # Encontrar todos os stages válidos presentes no custom_fields_values
+            found_stages = []
             for field in custom_fields_values:
                 if isinstance(field, dict):
                     field_name = field.get("field_name")
                     if field_name and field_name in valid_stages:
-                        stage_field_names.append(field_name)
-                        logger.debug(f"Found valid stage field: {field_name}")
+                        stage_info = valid_stages[field_name]
+                        # Só considerar stages do mesmo pipeline que "Perdidos"
+                        if stage_info['pipeline_id'] == perdidos_pipeline_id:
+                            found_stages.append(stage_info)
+                            logger.debug(f"Found valid stage field: {field_name} at position {stage_info['position']}")
             
-            # Se não há stages ou só tem "Perdidos", não há etapa anterior
-            if len(stage_field_names) <= 1:
-                logger.debug("No previous stage found - only one or no stages")
+            # Se não há stages válidos encontrados
+            if not found_stages:
+                logger.debug("No valid stages found in custom_fields_values")
                 return None
                 
-            # Ordenar os stages encontrados pela posição no pipeline
-            stage_field_names.sort(key=lambda x: valid_stages[x]['position'])
+            # Se só tem o stage "Perdidos", não há etapa anterior
+            if len(found_stages) == 1 and found_stages[0]['stage_name'] == perdidos_stage:
+                logger.debug("Only 'Perdidos' stage found, no previous stage")
+                return None
+                
+            # Ordenar stages por posição no pipeline
+            found_stages.sort(key=lambda x: x['position'])
             
-            # Encontrar a posição do stage "Perdidos" na lista
-            perdidos_index = None
-            for i, stage_name in enumerate(stage_field_names):
-                if stage_name == perdidos_stage:
-                    perdidos_index = i
+            # Encontrar a etapa anterior mais próxima ao "Perdidos"
+            previous_stage = None
+            for stage in found_stages:
+                # Se a posição é menor que "Perdidos", é uma etapa anterior
+                if stage['position'] < perdidos_position:
+                    previous_stage = stage['stage_name']
+                # Se chegou no "Perdidos" ou passou dele, parar
+                elif stage['position'] >= perdidos_position:
                     break
                     
-            # Se encontrou "Perdidos" e há uma etapa anterior
-            if perdidos_index is not None and perdidos_index > 0:
-                previous_stage = stage_field_names[perdidos_index - 1]
+            if previous_stage:
                 logger.debug(f"Previous stage before {perdidos_stage}: {previous_stage}")
                 return previous_stage
-                
-            logger.debug(f"Perdidos stage not found in field names or no previous stage")
-            return None
+            else:
+                logger.debug(f"No previous stage found before {perdidos_stage}")
+                return None
             
         except Exception as e:
             logger.error(f"Error finding previous stage before lost: {e}")
