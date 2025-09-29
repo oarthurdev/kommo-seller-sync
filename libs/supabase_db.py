@@ -1523,51 +1523,75 @@ class SupabaseClient:
             str: Nome da etapa anterior ou None se não encontrado
         """
         try:
-            if not custom_fields_values or not isinstance(custom_fields_values, list):
+            if not custom_fields_values:
                 return None
                 
-            # Buscar o stage_name correspondente ao status "Perdidos" (stage_id = 143)
-            stages_result = self.client.table("stages_list").select("*").eq(
-                "company_id", company_id).eq("stage_id", 143).execute()
+            # Se for string JSON, fazer parse
+            if isinstance(custom_fields_values, str):
+                try:
+                    import json
+                    custom_fields_values = json.loads(custom_fields_values)
+                except json.JSONDecodeError:
+                    return None
+                    
+            if not isinstance(custom_fields_values, list):
+                return None
+                
+            # Buscar todas as stages da empresa para identificar quais são stages válidos
+            stages_result = self.client.table("stages_list").select("stage_name, stage_id, position").eq(
+                "company_id", company_id).order("position").execute()
                 
             if not stages_result.data:
-                logger.warning(f"Stage with ID 143 not found for company {company_id}")
+                logger.warning(f"No stages found for company {company_id}")
                 return None
                 
-            perdidos_stage_name = stages_result.data[0]['stage_name']
-            logger.debug(f"Found 'Perdidos' stage name: {perdidos_stage_name}")
+            # Criar mapa de stage_names válidos ordenados por posição
+            valid_stages = {stage['stage_name']: stage for stage in stages_result.data}
             
-            # Encontrar todos os field_names que correspondem a stages
+            # Encontrar o stage_name correspondente ao status "Perdidos" (stage_id = 143)
+            perdidos_stage = None
+            for stage in stages_result.data:
+                if stage['stage_id'] == 143:
+                    perdidos_stage = stage['stage_name']
+                    break
+                    
+            if not perdidos_stage:
+                logger.warning(f"Stage with ID 143 (Perdidos) not found for company {company_id}")
+                return None
+                
+            logger.debug(f"Found 'Perdidos' stage name: {perdidos_stage}")
+            
+            # Encontrar todos os field_names que correspondem a stages válidos
             stage_field_names = []
             for field in custom_fields_values:
                 if isinstance(field, dict):
                     field_name = field.get("field_name")
-                    if field_name:
-                        # Verificar se este field_name existe como stage_name na tabela stages_list
-                        stage_check = self.client.table("stages_list").select("stage_name").eq(
-                            "company_id", company_id).eq("stage_name", field_name).execute()
-                        
-                        if stage_check.data:
-                            stage_field_names.append(field_name)
-                            logger.debug(f"Found stage field: {field_name}")
+                    if field_name and field_name in valid_stages:
+                        stage_field_names.append(field_name)
+                        logger.debug(f"Found valid stage field: {field_name}")
             
             # Se não há stages ou só tem "Perdidos", não há etapa anterior
             if len(stage_field_names) <= 1:
+                logger.debug("No previous stage found - only one or no stages")
                 return None
                 
+            # Ordenar os stages encontrados pela posição no pipeline
+            stage_field_names.sort(key=lambda x: valid_stages[x]['position'])
+            
             # Encontrar a posição do stage "Perdidos" na lista
             perdidos_index = None
             for i, stage_name in enumerate(stage_field_names):
-                if stage_name == perdidos_stage_name:
+                if stage_name == perdidos_stage:
                     perdidos_index = i
                     break
                     
             # Se encontrou "Perdidos" e há uma etapa anterior
             if perdidos_index is not None and perdidos_index > 0:
                 previous_stage = stage_field_names[perdidos_index - 1]
-                logger.debug(f"Previous stage before {perdidos_stage_name}: {previous_stage}")
+                logger.debug(f"Previous stage before {perdidos_stage}: {previous_stage}")
                 return previous_stage
                 
+            logger.debug(f"Perdidos stage not found in field names or no previous stage")
             return None
             
         except Exception as e:
