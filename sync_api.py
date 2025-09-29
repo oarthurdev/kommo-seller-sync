@@ -1089,63 +1089,6 @@ def debug_events(company_id):
         }), 500
 
 
-@app.route('/lost-leads-funnel/<company_id>')
-def get_lost_leads_funnel(company_id):
-    """Get lost leads funnel analysis showing previous stages before being lost"""
-    try:
-        # Get date filter parameters
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        
-        date_filter_start = None
-        date_filter_end = None
-        
-        if start_date:
-            try:
-                from datetime import datetime
-                date_filter_start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-            except ValueError:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Invalid start_date format. Use ISO format.'
-                }), 400
-                
-        if end_date:
-            try:
-                from datetime import datetime
-                date_filter_end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-            except ValueError:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Invalid end_date format. Use ISO format.'
-                }), 400
-
-        # Perform lost leads funnel analysis
-        funnel_analysis = supabase.analyze_lost_leads_funnel(
-            company_id=company_id,
-            date_filter_start=date_filter_start,
-            date_filter_end=date_filter_end
-        )
-        
-        return jsonify({
-            'status': 'success',
-            'company_id': company_id,
-            'date_filter': {
-                'start_date': start_date,
-                'end_date': end_date
-            },
-            'funnel_analysis': funnel_analysis,
-            'timestamp': datetime.now().isoformat()
-        })
-
-    except Exception as e:
-        logger.error(f"Error getting lost leads funnel for company {company_id}: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
-
-
 if __name__ == '__main__':
     # Start global sync manager in background
     global_manager_thread = threading.Thread(target=global_sync_manager,
