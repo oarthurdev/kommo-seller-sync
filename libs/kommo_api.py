@@ -606,15 +606,70 @@ class KommoAPI:
                 f"Total de leads encontrados em TODOS os pipelines: {len(filtered_leads)}"
             )
 
+            # Buscar todos os usuários para mapear nomes para IDs
+            users_df = self.get_users(active_only=False)  # Incluir usuários inativos também
+            user_name_to_id = {}
+            if not users_df.empty:
+                for _, user in users_df.iterrows():
+                    user_name_to_id[user['nome']] = user['id']
+                logger.info(f"Mapeamento de usuários criado: {len(user_name_to_id)} usuários")
+
             processed_leads = []
             for lead in filtered_leads:
-                responsavel_id = lead.get("responsible_user_id")
+                # Nova lógica para extrair responsavel_id do custom_fields_values
+                responsavel_id = None
+                corretor_responsavel_name = None
+                
+                # Processar custom_fields_values para buscar "Corretor responsável"
+                custom_fields = lead.get("custom_fields_values", [])
+                if custom_fields:
+                    for field in custom_fields:
+                        if isinstance(field, dict):
+                            field_name = field.get("field_name")
+                            if field_name == "Corretor responsável":
+                                values = field.get("values", [])
+                                if values and len(values) > 0 and isinstance(values[0], dict):
+                                    corretor_responsavel_name = values[0].get("value")
+                                    if corretor_responsavel_name:
+                                        # Buscar ID do usuário pelo nome
+                                        responsavel_id = user_name_to_id.get(corretor_responsavel_name)
+                                        if responsavel_id:
+                                            logger.debug(f"Lead {lead.get('id')}: Corretor '{corretor_responsavel_name}' mapeado para ID {responsavel_id}")
+                                        else:
+                                            logger.warning(f"Lead {lead.get('id')}: Corretor '{corretor_responsavel_name}' não encontrado nos usuários")
+                                break
+                
+                # Se não encontrou corretor responsável nos custom_fields, usar o responsible_user_id original
+                if responsavel_id is None:
+                    responsavel_id = lead.get("responsible_user_id")
+
                 contato_nome = ""
                 if lead.get("_embedded", {}).get("contacts"):
                     contato_nome = lead["_embedded"]["contacts"][0].get(
                         "name", "")
 
+                # Nova lógica para status_id baseado no campo "Perdidos"
                 status_id = lead.get("status_id")
+                perdido_status = False
+                
+                # Processar custom_fields_values para buscar campo "Perdidos"
+                if custom_fields:
+                    for field in custom_fields:
+                        if isinstance(field, dict):
+                            field_name = field.get("field_name")
+                            if field_name == "Perdidos":
+                                values = field.get("values", [])
+                                if values and len(values) > 0 and isinstance(values[0], dict):
+                                    perdido_value = values[0].get("value")
+                                    if perdido_value is True or str(perdido_value).lower() == "true":
+                                        perdido_status = True
+                                        logger.debug(f"Lead {lead.get('id')}: Campo 'Perdidos' definido como true")
+                                break
+                
+                # Setar status_id = 143 apenas se campo "Perdidos" estiver true
+                if perdido_status:
+                    status_id = 143
+                
                 pipeline_id = lead.get("pipeline_id")
 
                 # Get stage information from our mapping
