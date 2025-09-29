@@ -266,7 +266,9 @@ class SyncManager:
 
             # Processar Leads com validação de foreign key
             if isinstance(leads, pd.DataFrame) and not leads.empty:
-                # Filtrar leads apenas com responsavel_id válido
+                # Filtrar leads apenas com responsavel_id válido para operações de banco
+                # IMPORTANTE: Esta filtragem é apenas para salvar no banco - não afeta
+                # os dados originais que serão passados para cálculo de broker_points
                 original_count = len(leads)
                 if valid_broker_ids:
                     leads_filtered = leads[
@@ -279,8 +281,8 @@ class SyncManager:
 
                 filtered_count = len(leads_filtered)
                 if filtered_count < original_count:
-                    logger.warning(
-                        f"Filtered out {original_count - filtered_count} leads with invalid responsavel_id"
+                    logger.info(
+                        f"Database filtering: {original_count - filtered_count} leads with invalid responsavel_id filtered out for database operations (broker points calculation will still use all {original_count} leads)"
                     )
 
                 if not leads_filtered.empty:

@@ -1833,6 +1833,7 @@ class SupabaseClient:
 
                 logger.info(
                     f"🔍 Calculando leads_perdidos para broker: {broker_name}")
+                logger.info(f"🔍 Total de leads disponíveis para análise: {len(all_leads)}")
 
                 # Extrair primeiro nome do broker para comparação fallback
                 broker_first_name = broker_name.split()[0] if broker_name else ""
@@ -1847,6 +1848,8 @@ class SupabaseClient:
                 import json
                 total_count = 0
                 processed_count = 0
+                leads_with_perdido_field = 0
+                leads_with_empty_perdido = 0
 
                 # Percorrer todos os leads para encontrar campo "Esse lead foi perdido por"
                 for idx, lead in all_leads.iterrows():
@@ -1880,6 +1883,7 @@ class SupabaseClient:
                             if isinstance(field, dict):
                                 field_name = field.get("field_name")
                                 if field_name == "Esse lead foi perdido por":
+                                    leads_with_perdido_field += 1
                                     values = field.get("values", [])
                                     if values:
                                         # Iterar por todos os values (multiselect)
@@ -1891,13 +1895,16 @@ class SupabaseClient:
                                                     # Primeira tentativa: comparar com o nome completo do broker
                                                     if corretor_name == broker_name:
                                                         total_count += 1
-                                                        logger.debug(f"Lead {lead_id}: Broker '{broker_name}' (nome completo) encontrado em 'Esse lead foi perdido por'")
+                                                        logger.info(f"🎯 Lead {lead_id}: Broker '{broker_name}' (nome completo) encontrado em 'Esse lead foi perdido por'")
                                                         break  # Contar apenas uma vez por lead para este broker
                                                     # Segunda tentativa: comparar apenas com o primeiro nome
                                                     elif corretor_name == broker_first_name:
                                                         total_count += 1
-                                                        logger.debug(f"Lead {lead_id}: Broker '{broker_first_name}' (primeiro nome) encontrado em 'Esse lead foi perdido por' (valor: '{corretor_name}')")
+                                                        logger.info(f"🎯 Lead {lead_id}: Broker '{broker_first_name}' (primeiro nome) encontrado em 'Esse lead foi perdido por' (valor: '{corretor_name}')")
                                                         break  # Contar apenas uma vez por lead para este broker
+                                    else:
+                                        leads_with_empty_perdido += 1
+                                        logger.debug(f"Lead {lead_id}: Campo 'Esse lead foi perdido por' existe mas está vazio")
                                     break  # Encontrou o campo, pode parar de procurar
 
                     except Exception as e:
@@ -1905,7 +1912,11 @@ class SupabaseClient:
                         continue
 
                 logger.info(
-                    f"🎯 Leads perdidos encontrados para {broker_name}: {total_count} (de {processed_count} leads processados)")
+                    f"🎯 === RESUMO LEADS_PERDIDOS para {broker_name} ===")
+                logger.info(f"🎯 Total leads processados: {processed_count}")
+                logger.info(f"🎯 Leads com campo 'Esse lead foi perdido por': {leads_with_perdido_field}")
+                logger.info(f"🎯 Leads com campo vazio: {leads_with_empty_perdido}")
+                logger.info(f"🎯 Leads perdidos encontrados: {total_count}")
                 return total_count
 
             elif rule_name == "leads_descartados":
