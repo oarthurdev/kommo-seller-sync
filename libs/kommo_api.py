@@ -720,8 +720,8 @@ class KommoAPI:
                                   if lead.get("created_at") else None),
                     "atualizado_em": (parse_datetime_sp(lead.get("updated_at"))
                                       if lead.get("updated_at") else None),
-                    "fechado":
-                    lead.get("closed_at") is not None,
+                    "closed_at":(parse_datetime_sp(lead.get("closed_at"))
+                                      if lead.get("closed_at") else None),
                     "status":
                     ("Ganho" if status_id == 142 else
                      "Perdido" if status_id == 143 else "Em progresso")

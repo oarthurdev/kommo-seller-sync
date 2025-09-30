@@ -474,7 +474,7 @@ class SupabaseClient:
             # Convert datetime columns to ISO format
             datetime_columns = [
                 'criado_em', 'atualizado_em', 'data_contato',
-                'data_criacao_amocrm'
+                'data_criacao_amocrm', 'closed_at'
             ]
             for col in datetime_columns:
                 if col in leads_df_clean.columns:
@@ -1763,6 +1763,11 @@ class SupabaseClient:
                     if 'atualizado_em' in broker_leads.columns:
                         broker_leads.loc[:, 'atualizado_em'] = pd.to_datetime(
                             broker_leads['atualizado_em'],
+                            errors='coerce',
+                            utc=True)
+                    if 'closed_at' in broker_leads.columns:
+                        broker_leads.loc[:, 'closed_at'] = pd.to_datetime(
+                            broker_leads['closed_at'],
                             errors='coerce',
                             utc=True)
             except Exception as date_error:

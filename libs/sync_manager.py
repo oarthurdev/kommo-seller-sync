@@ -481,6 +481,11 @@ class SyncManager:
 
             for record in records:
                 processed = self._prepare_record(record)
+                processed = self._sanitize_timestamps(
+                    processed,
+                    ["criado_em", "closed_at", "updated_at"]
+                )
+
                 record_id = processed.get('id')
 
                 # Skip if we already processed this ID in this batch
@@ -555,6 +560,10 @@ class SyncManager:
 
             for record in records:
                 processed = self._prepare_record(record)
+                processed = self._sanitize_timestamps(
+                    processed,
+                    ["criado_em", "closed_at", "updated_at"]
+                )
                 record_id = processed.get('id')
 
                 # Skip if we already processed this ID in this batch
@@ -608,6 +617,19 @@ class SyncManager:
             logger.error(
                 f"Error processing incremental batch for {table}: {str(e)}")
             raise
+
+    def _sanitize_timestamps(self, record: dict, fields: list[str]) -> dict:
+        """Converte NaT/None em None para campos de timestamp apenas se o campo existir."""
+        for f in fields:
+            if f not in record:
+                continue  # pula se o campo não existe nesse record
+
+            val = record.get(f)
+            if val in ["NaT", "NaN", None, ""]:
+                record[f] = None
+            elif hasattr(val, "isoformat"):
+                record[f] = val.isoformat()
+        return record
 
     def sync_data(self,
                   brokers=None,
