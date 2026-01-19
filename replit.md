@@ -55,10 +55,7 @@ Preferred communication style: Simple, everyday language.
 - **kommo_config**: Company configuration and API credentials
 - **brokers**: Real estate broker information and performance data
 - **leads**: Lead data and pipeline information
-- **activities**: Historical activity tracking
-- **stages**: Pipeline stage definitions
 
-## Infrastructure
-- **Rate Limiting**: Custom implementation to respect Kommo API limits
-- **File System**: Log file management with automatic rotation
-- **Environment Variables**: Configuration via .env files for security
+# Installation
+
+1. **Clone the repository:**
